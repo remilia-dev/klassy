@@ -49,7 +49,7 @@ void DecorationSettingsProvider::reconfigure()
 
     DecorationExceptionList exceptions;
     exceptions.readConfig(m_config);
-    m_exceptions = exceptions.getDefault();
+    m_exceptions = exceptions.getBundled();
     m_exceptions.append(exceptions.get());
 }
 
@@ -82,6 +82,11 @@ InternalSettingsPtr DecorationSettingsProvider::internalSettings()
                 internalSettings->setProperty("noCacheException",
                                               true); // this property is to indicate not to cache shadows or colours for an exception with a Preset
                                                      // -- this is because the Preset exception can alter shadows and colours
+            }
+            if (internalSettings->exceptionShowInTitle()) {
+                internalSettings->setShowTitleDocumentName(internalSettings->exceptionShowTitleDocumentName());
+                internalSettings->setShowTitleAppIcon(internalSettings->exceptionShowTitleAppIcon());
+                internalSettings->setShowTitleAppName(internalSettings->exceptionShowTitleAppName());
             }
             if (internalSettings->opaqueTitleBar()) {
                 internalSettings->setProperty("noCacheException", true);

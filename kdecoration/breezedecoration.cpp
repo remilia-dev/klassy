@@ -13,6 +13,9 @@
 #include "setqdebug_logging.h"
 #endif
 
+#include "appmenu/button.h"
+#include "appmenu/buttongroup.h"
+#include "appmenu/textbutton.h"
 #include "breezeboxshadowrenderer.h"
 #include "breezebutton.h"
 #include "breezesettingsprovider.h"
@@ -28,17 +31,21 @@
 
 #include <KColorUtils>
 #include <KConfigGroup>
+#include <KIconLoader>
 #include <KPluginFactory>
 #include <KWindowSystem>
 
+#include <QApplication>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QHoverEvent>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QTextStream>
 #include <QTimer>
+#include <QtNumeric>
 
 #include <cmath>
 #include <mutex>
@@ -291,7 +298,7 @@ bool Decoration::init()
     m_isRightToLeft = (QGuiApplication::layoutDirection() == Qt::LayoutDirection::RightToLeft);
 
     reconfigureMain(true);
-    
+
     // active state change animation
     // It is important start and end value are of the same type, hence 0.0 and not just 0
     m_animation->setStartValue(0.0);
@@ -339,9 +346,7 @@ bool Decoration::init()
 
     // a change in font might cause the borders to change
     connect(s.get(), &KDecoration3::DecorationSettings::fontChanged, this, &Decoration::recalculateBorders);
-    connect(s.get(), &KDecoration3::DecorationSettings::fontChanged, this, &Decoration::updateBlur); // for the case when a border with transparency
     connect(s.get(), &KDecoration3::DecorationSettings::spacingChanged, this, &Decoration::recalculateBorders);
-    connect(s.get(), &KDecoration3::DecorationSettings::spacingChanged, this, &Decoration::updateBlur); // for the case when a border with transparency
 
     // color cache update
     // The slot will only update if the UUID has changed, hence preventing unnecessary multiple colour cache updates
@@ -364,6 +369,7 @@ bool Decoration::init()
 #if KDECORATION_VERSION >= KDECORATION_VERSION_CHECK(6, 7, 0) // workaround for strange linking error on Plasma 6.6.2
     connect(c, &KDecoration3::DecoratedWindow::excludeFromCaptureChanged, this, &Decoration::updateButtonsGeometryDelayed);
 #endif
+    connect(c, &KDecoration3::DecoratedWindow::hasApplicationMenuChanged, this, &Decoration::updateButtonsGeometryDelayed);
 
     // full reconfiguration
     connect(s.get(), &KDecoration3::DecorationSettings::reconfigured, this, &Decoration::reconfigure);
@@ -422,7 +428,7 @@ void Decoration::updateTitleBar()
     qreal borderTop = this->borderTop();
 
     // prevents resize handles appearing in button at top window edge for large full-height buttons
-    if (m_buttonBackgroundType == ButtonBackgroundType::FullHeight
+    if ((m_buttonBackgroundType == ButtonBackgroundType::FullHeight || m_internalSettings->appMenuBarEnabled())
         && !(m_internalSettings->drawBorderOnMaximizedWindows() && (c->isMaximizedVertically() || c->adjacentScreenEdges().testFlag(Qt::TopEdge)))) {
         width = c->width();
         height = borderTop;
@@ -593,8 +599,7 @@ void Decoration::reconfigureMain(const bool noUpdateShadow)
     SettingsProvider::self()->reconfigure();
     m_internalSettings = SettingsProvider::self()->internalSettings(this);
 
-    QPalette clientPalette = c->palette();
-    updateDecorationColors(clientPalette);
+    updateDecorationColors(c->palette());
     updateTaskManagerTypeAndSide();
 
     s_kdeGlobalConfig->reparseConfiguration();
@@ -613,6 +618,9 @@ void Decoration::reconfigureMain(const bool noUpdateShadow)
     }
 
     setScaledCornerRadius();
+    if (m_internalSettings->appMenuBarEnabled()) {
+        setAppMenuBarButtonCornerRadius();
+    }
 
     if (m_internalSettings->buttonShape() == InternalSettings::EnumButtonShape::FullHeightRectangle
         || m_internalSettings->buttonShape() == InternalSettings::EnumButtonShape::FullHeightRoundedRectangle
@@ -694,6 +702,8 @@ void Decoration::updateDecorationColors(const QPalette &clientPalette, QByteArra
         }
     }
 
+    bool appMenuBarBackgroundWindowColoredEnabled = this->appMenuBarBackgroundWindowColoredEnabled();
+
     // The preset exception may modify the decoration colours by having a different translucentButtonBackgroundsOpacity, so in this case we don't want to
     // cache the decoration colours as it may corrupt the colours for normal non-exception decoration windows
     bool noCache = m_internalSettings->property("noCacheException").toBool() || clientSpecificPalette;
@@ -702,9 +712,19 @@ void Decoration::updateDecorationColors(const QPalette &clientPalette, QByteArra
         if (!m_decorationColors || m_decorationColors->isCachedPalette()) {
             m_decorationColors = std::make_unique<DecorationColors>(false);
         }
+
+        if (appMenuBarBackgroundWindowColoredEnabled && (!m_appMenuBarWindowColoredColors || m_appMenuBarWindowColoredColors->isCachedPalette())) {
+            m_appMenuBarWindowColoredColors = std::make_unique<DecorationColors>(false, DecorationColorsMode::AppMenuBarWindowColored);
+            m_appMenuBarWindowColoredColors->setNoAddedTitleBarOpacity();
+        }
     } else {
         if (!m_decorationColors || !m_decorationColors->isCachedPalette()) {
             m_decorationColors = std::make_unique<DecorationColors>(true);
+        }
+
+        if (appMenuBarBackgroundWindowColoredEnabled && (!m_appMenuBarWindowColoredColors || !m_appMenuBarWindowColoredColors->isCachedPalette())) {
+            m_appMenuBarWindowColoredColors = std::make_unique<DecorationColors>(true, DecorationColorsMode::AppMenuBarWindowColored);
+            m_appMenuBarWindowColoredColors->setNoAddedTitleBarOpacity();
         }
     }
 
@@ -762,6 +782,41 @@ void Decoration::updateDecorationColors(const QPalette &clientPalette, QByteArra
                                                               inactiveTitleBarText,
                                                               inactiveTitleBarBase,
                                                               uuid); // update the decoration colors
+    }
+
+    if (appMenuBarBackgroundWindowColoredEnabled) {
+        bool generateColors = false;
+        if (!m_appMenuBarWindowColoredColors->areColorsGenerated()) {
+            generateColors = true;
+        } else {
+            if (!uuid.isEmpty()
+                && (noCache
+                    || (!noCache
+                        && uuid != m_appMenuBarWindowColoredColors->settingsUpdateUuid()))) { // case from
+                                                                                              // generateDecorationColorsOnDecorationSettingsPaletteUpdate()
+                generateColors = true;
+            }
+
+            // TODO: palette may not be a reliable indicator of the entire colour scheme - get an update to KDecoration3::DecoratedWindow to read QString
+            // m_colorScheme instead
+            if (!generateColors && palette != *m_appMenuBarWindowColoredColors->basePalette()) {
+                generateColors = true;
+            }
+        }
+        if (generateColors) {
+            QColor activeTitleBarBase = palette.color(QPalette::ColorGroup::Active, QPalette::ColorRole::Window);
+            QColor inactiveTitleBarBase = palette.color(QPalette::ColorGroup::Inactive, QPalette::ColorRole::Window);
+            QColor activeTitleBarText = palette.color(QPalette::ColorGroup::Active, QPalette::ColorRole::WindowText);
+            QColor inactiveTitleBarText = palette.color(QPalette::ColorGroup::Inactive, QPalette::ColorRole::WindowText);
+
+            m_appMenuBarWindowColoredColors->generateDecorationAndButtonColors(palette,
+                                                                               m_internalSettings,
+                                                                               activeTitleBarText,
+                                                                               activeTitleBarBase,
+                                                                               inactiveTitleBarText,
+                                                                               inactiveTitleBarBase,
+                                                                               uuid); // update the decoration colors
+        }
     }
 }
 
@@ -880,7 +935,7 @@ void Decoration::recalculateBorders()
         top = bottom;
     } else {
         QFontMetrics fm(s->font());
-        top += KDecoration3::snapToPixelGrid(qMax(qreal(fm.height()), m_scaledSmallButtonPaddedSizeNext), scale);
+        top += qCeil(qMax(qreal(fm.height()), m_scaledSmallButtonPaddedSize) * scale) / scale;
 
         // padding below
         top += scaledTitleBarSeparatorHeight(true);
@@ -897,7 +952,7 @@ void Decoration::recalculateBorders()
     qreal extTop = 0;
 
     // Add extended resize handles for Full-sized Rectangle highlight as they cannot overlap with larger full-sized buttons
-    if (m_buttonBackgroundType == ButtonBackgroundType::FullHeight || m_scaledTitleBarTopMarginNext < extSize) {
+    if (m_buttonBackgroundType == ButtonBackgroundType::FullHeight || m_internalSettings->appMenuBarEnabled() || m_scaledTitleBarTopMarginNext < extSize) {
         if (!isMaximizedVertically())
             extTop = extSize;
     }
@@ -1040,7 +1095,6 @@ void Decoration::updateButtonsGeometry()
         bHeightNormal = captionHeight + (isTopEdge() ? m_scaledTitleBarTopMargin : 0);
         // do not pixel grid snap icon offsets -- the icon gets snapped at the end anyway, and this keeps icons centred
         verticalIconOffsetNormal = (isTopEdge() ? m_scaledTitleBarTopMargin : 0) + captionHeight - m_scaledSmallButtonPaddedSize + bWidthMargin;
-
         bWidthLeft = m_scaledSmallButtonPaddedSize;
         bWidthRight = m_scaledSmallButtonPaddedSize;
 
@@ -1339,6 +1393,13 @@ void Decoration::updateButtonsGeometry()
         }
     }
 
+    // menu buttons
+    updateAppMenuBar();
+    if (m_appMenuBarButtons) {
+        m_appMenuBarButtons->updateShowing();
+        m_appMenuBarButtons->updateGeometry();
+    }
+
     update();
 }
 
@@ -1498,8 +1559,8 @@ void Decoration::paintTitleBar(QPainter *painter, const QRectF &repaintRegion)
 
     painter->setCompositionMode(QPainter::CompositionMode_SourceOver);
     // draw titlebar separator
-    qreal separatorHeight;
-    if ((separatorHeight = scaledTitleBarSeparatorHeight(false))) {
+    qreal separatorHeight = scaledTitleBarSeparatorHeight(false);
+    if (separatorHeight) {
         const QColor titleBarSeparatorColor(this->titleBarSeparatorColor());
 
         if (titleBarSeparatorColor.isValid()) {
@@ -1523,21 +1584,77 @@ void Decoration::paintTitleBar(QPainter *painter, const QRectF &repaintRegion)
     painter->restore();
 
     // draw caption
-    QFont font = s->font();
-    if (m_internalSettings->boldTitle() && c->isActive()) {
-        QFont::Weight weight = font.weight();
-        if (weight < QFont::Black) {
-            weight = (weight >= QFont::DemiBold) ? QFont::ExtraBold : QFont::DemiBold;
-        }
-        font.setWeight(weight);
-    }
-    painter->setFont(font);
+    painter->setFont(fontWithAddedWeight());
     QColor fontColor = this->fontColor();
+    fontColor = ColorTools::alphaMix(fontColor, m_captionOpacity);
     painter->setPen(fontColor);
-    const auto [maxCaptionRectangle, alignment] = captionRect();
-    const QString caption = painter->fontMetrics().elidedText(c->caption(), Qt::ElideMiddle, maxCaptionRectangle.width());
-    QRectF captionBoundingRect;
-    painter->drawText(maxCaptionRectangle, alignment | Qt::TextSingleLine, caption, &captionBoundingRect);
+
+    auto titleParams = getTitleParams();
+    QRectF maxCaptionRectangle;
+    Qt::Alignment alignment;
+    std::tie(maxCaptionRectangle, alignment) = captionRect(titleParams);
+
+    QRectF fullTitleRect;
+    // elide and draw text
+    if (titleParams->useRawTitle) {
+        const QString title = painter->fontMetrics().elidedText(c->caption(), Qt::TextElideMode::ElideMiddle, maxCaptionRectangle.width());
+        painter->drawText(maxCaptionRectangle, alignment | Qt::TextFlag::TextSingleLine, title, &fullTitleRect);
+    } else {
+        qreal totalWidth = titleParams->maxTitleWidth;
+        // if not enough space, first collapse AppName into icon only
+        if ((titleParams->maxTitleWidth > maxCaptionRectangle.width()) && m_internalSettings->showTitleAppIcon() && !titleParams->appNameIsRawTitle) {
+            totalWidth -= titleParams->appNameWidth;
+            titleParams->appName = QStringLiteral("");
+            titleParams->appNameWidth = 0;
+        }
+
+        // elide documentName and recalculate elided width and totalWidth
+        if (titleParams->appNameIsRawTitle) {
+            titleParams->appName = painter->fontMetrics().elidedText(titleParams->appName,
+                                                                     Qt::TextElideMode::ElideMiddle,
+                                                                     maxCaptionRectangle.width() - titleParams->appIconWidth
+                                                                         - titleParams->appIconSpaceWidthBefore - titleParams->appIconSpaceWidthAfter);
+            totalWidth -= titleParams->appNameWidth;
+            titleParams->appNameWidth = painter->fontMetrics().boundingRect(titleParams->appName).width();
+            totalWidth += titleParams->appNameWidth;
+        } else { // normal case for eliding documentName
+            titleParams->documentName = painter->fontMetrics().elidedText(titleParams->documentName,
+                                                                          Qt::TextElideMode::ElideMiddle,
+                                                                          maxCaptionRectangle.width() - titleParams->appIconWidth
+                                                                              - titleParams->appIconSpaceWidthBefore - titleParams->appIconSpaceWidthAfter);
+            totalWidth -= titleParams->documentNameWidth;
+            titleParams->documentNameWidth = painter->fontMetrics().boundingRect(titleParams->documentName).width();
+            totalWidth += titleParams->documentNameWidth;
+        }
+
+        qreal textHeight = painter->fontMetrics().height();
+        QRectF documentNameRect = QRectF(QPointF(0, 0), QSizeF(titleParams->documentNameWidth, textHeight));
+        QRectF iconRect = QRectF(QPointF(0, 0), QSizeF(titleParams->appIconWidth, titleParams->appIconWidth));
+        QRectF appNameRect = QRectF(QPointF(0, 0), QSizeF(titleParams->appNameWidth, textHeight));
+
+        fullTitleRect = QRectF(QPointF(0, 0), QSizeF(totalWidth, textHeight));
+
+        // set alignments
+        if (alignment.testFlag(Qt::AlignmentFlag::AlignCenter)) {
+            fullTitleRect.moveCenter(maxCaptionRectangle.center());
+        } else if (alignment.testFlag(Qt::AlignmentFlag::AlignLeft)) {
+            fullTitleRect.moveCenter(maxCaptionRectangle.center()); // center vertically first
+            fullTitleRect.moveLeft(maxCaptionRectangle.left());
+        } else if (alignment.testFlag(Qt::AlignmentFlag::AlignRight)) {
+            fullTitleRect.moveCenter(maxCaptionRectangle.center()); // center vertically first
+            fullTitleRect.moveRight(maxCaptionRectangle.right());
+        }
+        documentNameRect.moveTopLeft(fullTitleRect.topLeft());
+        iconRect.moveCenter(documentNameRect.center());
+        iconRect.moveLeft(documentNameRect.right() + titleParams->appIconSpaceWidthBefore);
+        appNameRect.moveTopLeft(documentNameRect.topRight()
+                                + QPointF(titleParams->appIconWidth + titleParams->appIconSpaceWidthBefore + titleParams->appIconSpaceWidthAfter, 0));
+
+        // draw text and icon
+        painter->drawText(documentNameRect, Qt::TextFlag::TextSingleLine | Qt::TextFlag::TextDontClip, titleParams->documentName);
+        paintAppOrWindowIcon(painter, iconRect.toRect(), fontColor, false);
+        painter->drawText(appNameRect, Qt::TextFlag::TextSingleLine | Qt::TextFlag::TextDontClip, titleParams->appName);
+    }
 
     // draw underline
     if (m_internalSettings->underlineTitle() && c->isActive()) {
@@ -1549,10 +1666,7 @@ void Decoration::paintTitleBar(QPainter *painter, const QRectF &repaintRegion)
         underlinePen.setWidthF(penWidth);
         painter->setPen(underlinePen);
         qreal halfPenWidth = penWidth / 2;
-        QLine underline(captionBoundingRect.left(),
-                        captionBoundingRect.bottom() + halfPenWidth,
-                        captionBoundingRect.right(),
-                        captionBoundingRect.bottom() + halfPenWidth);
+        QLine underline(fullTitleRect.left(), fullTitleRect.bottom() + halfPenWidth, fullTitleRect.right(), fullTitleRect.bottom() + halfPenWidth);
         painter->drawLine(underline);
     }
 
@@ -1560,6 +1674,91 @@ void Decoration::paintTitleBar(QPainter *painter, const QRectF &repaintRegion)
     painter->setPen(fontColor);
     m_leftButtons->paint(painter, repaintRegion);
     m_rightButtons->paint(painter, repaintRegion);
+
+    if (m_appMenuBarButtons) { // paint background of AppMenuBar
+        if (shouldPaintAppMenuBarBackgroundWindowColored()) {
+            QColor base, separator;
+            std::tie(base, separator) = appMenuBarBackgroundColors();
+
+            painter->setBrush(base);
+            painter->setPen(Qt::PenStyle::NoPen);
+
+            QRectF visibleAppMenuBarRect(m_appMenuBarButtons->visibleTopLeft(),
+                                         QSizeF(m_appMenuBarButtons->visibleWidth(), m_appMenuBarButtons->geometry().height() + separatorHeight));
+            bool notAtLeftEdge = !qFuzzyCompare(visibleAppMenuBarRect.left(), borderLeft());
+            bool notAtRightEdge = !qFuzzyCompare(visibleAppMenuBarRect.right(), rect().right() - borderRight());
+            bool maximized = isMaximized();
+            Corners corners;
+            if (!maximized) {
+                corners = CornersTop;
+            } else {
+                if (notAtLeftEdge) {
+                    corners |= CornerTopLeft;
+                }
+                if (notAtRightEdge) {
+                    corners |= CornerTopRight;
+                }
+            }
+
+            QPainterPath visibleAppMenuBarPathBackground = GeometryTools::roundedPath(visibleAppMenuBarRect, corners, m_appMenuBarButtonCornerRadius);
+            painter->drawPath(visibleAppMenuBarPathBackground);
+
+            // draw AppMenuOutline in separator colour, if separator enabled
+            if (bool(separatorHeight) && separator.isValid()) {
+                QPen p(separator);
+                p.setWidthF(separatorHeight);
+                p.setCapStyle(Qt::FlatCap);
+                painter->setPen(p);
+
+                painter->setBrush(Qt::BrushStyle::NoBrush);
+                Sides sides = SideTop;
+                qreal subtractTopLeft = 0;
+                qreal subtractTopRight = 0;
+                qreal subtractBottomRight = 0;
+                qreal subtractBottomLeft = 0;
+                if (notAtLeftEdge) {
+                    sides |= SideLeft;
+
+                } else if (!maximized) {
+                    subtractTopLeft = m_appMenuBarButtonCornerRadius / 2;
+                }
+                if (notAtRightEdge) {
+                    sides |= SideRight;
+                } else if (!maximized) {
+                    subtractTopRight = m_appMenuBarButtonCornerRadius / 2;
+                }
+                QPainterPath visibleAppMenuBarPathOutline = GeometryTools::roundedPath(visibleAppMenuBarRect.adjusted(0, separatorHeight / 2, 0, 0),
+                                                                                       corners,
+                                                                                       m_appMenuBarButtonCornerRadius,
+                                                                                       sides,
+                                                                                       subtractTopLeft,
+                                                                                       subtractTopRight,
+                                                                                       subtractBottomRight,
+                                                                                       subtractBottomLeft);
+                painter->drawPath(visibleAppMenuBarPathOutline);
+            }
+        }
+
+        painter->setBrush(Qt::BrushStyle::NoBrush);
+        painter->setPen(fontColor);
+        m_appMenuBarButtons->paint(painter, repaintRegion);
+    }
+}
+
+QFont Decoration::fontWithAddedWeight() const
+{
+    auto s = settings();
+    auto c = window();
+
+    QFont font = s->font();
+    if (m_internalSettings->boldTitle() && c->isActive()) {
+        QFont::Weight weight = font.weight();
+        if (weight < QFont::Black) {
+            weight = (weight >= QFont::DemiBold) ? QFont::ExtraBold : QFont::DemiBold;
+        }
+        font.setWeight(weight);
+    }
+    return font;
 }
 
 // outputs the icon size + padding to make a small button, the actual icon size, and the background size to make a small button
@@ -1667,20 +1866,28 @@ qreal Decoration::captionHeight() const
 }
 
 //________________________________________________________________
-QPair<QRectF, Qt::Alignment> Decoration::captionRect() const
+QPair<QRectF, Qt::Alignment> Decoration::captionRect(std::shared_ptr<TitleParams> titleParams) const
 {
     if (hideTitleBar()) {
         return qMakePair(QRect(), Qt::AlignCenter);
     } else {
-        auto c = window();
-
         qreal captionHeight = this->captionHeight();
 
-        const qreal leftOffset = m_leftButtons->buttons().isEmpty()
-            ? m_scaledTitleSidePadding
-            : m_leftButtons->geometry().x() + m_leftButtons->geometry().width() + m_scaledTitleSidePadding;
-        const qreal rightOffset =
+        qreal leftOffset = m_leftButtons->buttons().isEmpty() ? m_scaledTitleSidePadding
+                                                              : m_leftButtons->geometry().x() + m_leftButtons->geometry().width() + m_scaledTitleSidePadding;
+        qreal rightOffset =
             m_rightButtons->buttons().isEmpty() ? m_scaledTitleSidePadding : size().width() - m_rightButtons->geometry().x() + m_scaledTitleSidePadding;
+
+        bool appMenuBarVisible = false;
+        if (m_appMenuBarButtons && !m_appMenuBarButtons->buttons().isEmpty() && m_appMenuBarButtons->takesSpace() && m_appMenuBarButtons->visibleWidth() > 1) {
+            appMenuBarVisible = true;
+            const qreal menuWidth = m_scaledTitleSidePadding + m_appMenuBarButtons->visibleWidth();
+            if (m_appMenuBarButtons->position() == AppMenuPosition::Right) {
+                rightOffset += menuWidth + m_scaledButtonSpacingRight;
+            } else {
+                leftOffset += menuWidth + m_scaledButtonSpacingLeft;
+            }
+        }
 
         const qreal yOffset = m_scaledTitleBarTopMargin;
         const QRectF maxRect(leftOffset, yOffset, size().width() - leftOffset - rightOffset, captionHeight);
@@ -1697,18 +1904,24 @@ QPair<QRectF, Qt::Alignment> Decoration::captionRect() const
 
         default:
         case InternalSettings::EnumTitleAlignment::AlignCenterFullWidth: {
+            if (appMenuBarVisible) {
+                return qMakePair(maxRect, Qt::AlignCenter);
+            }
+
             // full caption rect
             const QRectF fullRect = QRectF(0, yOffset, size().width(), captionHeight);
-            QRectF boundingRect(settings()->fontMetrics().boundingRect(c->caption()).toRect());
 
             // text bounding rect
-            boundingRect.setTop(yOffset);
-            boundingRect.setHeight(captionHeight);
-            boundingRect.moveLeft((size().width() - boundingRect.width()) / 2);
+            QRectF maxTitleTextRect;
 
-            if (boundingRect.left() < leftOffset) {
+            maxTitleTextRect.setWidth(titleParams->maxTitleWidthCeil);
+            maxTitleTextRect.setTop(yOffset);
+            maxTitleTextRect.setHeight(captionHeight);
+            maxTitleTextRect.moveLeft((size().width() - maxTitleTextRect.width()) / 2);
+
+            if (maxTitleTextRect.left() < leftOffset) {
                 return qMakePair(maxRect, Qt::AlignVCenter | Qt::AlignLeft);
-            } else if (boundingRect.right() > size().width() - rightOffset) {
+            } else if (maxTitleTextRect.right() > size().width() - rightOffset) {
                 return qMakePair(maxRect, Qt::AlignVCenter | Qt::AlignRight);
             } else {
                 return qMakePair(fullRect, Qt::AlignCenter);
@@ -2114,6 +2327,7 @@ void Decoration::updateScale()
     setScaledIconSizes(false);
     setScaledButtonDimensions();
     updateButtonsGeometry();
+    updateBlur();
 }
 
 void Decoration::updateNextScale()
@@ -2122,6 +2336,7 @@ void Decoration::updateNextScale()
     setScaledTitleBarMargins(true);
     setScaledIconSizes(true);
     recalculateBorders();
+    updateBlur();
 }
 
 // for unison hovering
@@ -2134,23 +2349,261 @@ void Decoration::setButtonUnisonHovered(bool value)
     emit buttonUnisonHoveredChanged(value);
 }
 
-// for unison hovering
-void Decoration::hoverMoveEvent(QHoverEvent *event)
-{
-    if (m_internalSettings->unisonHovering()) {
-        const bool groupContains = m_leftButtons->geometry().contains(event->position()) || m_rightButtons->geometry().contains(event->position());
-        setButtonUnisonHovered(groupContains);
-    }
-
-    KDecoration3::Decoration::hoverMoveEvent(event);
-}
-
 void Decoration::hoverLeaveEvent(QHoverEvent *event)
 {
     if (m_internalSettings->unisonHovering()) {
         setButtonUnisonHovered(false);
     }
+
+    if (m_appMenuBarButtons) {
+        m_appMenuBarButtons->setHovered(false);
+    }
     KDecoration3::Decoration::hoverLeaveEvent(event);
+}
+
+void Decoration::mousePressEvent(QMouseEvent *event)
+{
+    KDecoration3::Decoration::mousePressEvent(event);
+    if (!m_internalSettings->appMenuBarButtonCanDragWindow() || !m_appMenuBarButtons) {
+        return;
+    }
+
+    const QPointF pos = event->position();
+    QRectF appMenuBarHoverArea = m_appMenuBarButtons->titleHoverArea();
+
+    if (appMenuBarHoverArea.contains(pos) && event->button() == Qt::MouseButton::LeftButton) {
+        m_appMenuBarButtons->startDragMove(pos);
+        event->setAccepted(false);
+    }
+}
+
+void Decoration::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (m_appMenuBarButtons) {
+        m_appMenuBarButtons->resetDragMove();
+
+        QPointF position = event->position();
+        QRectF hoverArea = m_appMenuBarButtons->titleHoverArea();
+        if (hoverArea.contains(position)) {
+            // on drag the menu is set not to be hovered; this restores the hover state at the end of a drag
+            m_appMenuBarButtons->setHovered(true);
+        } else {
+            m_appMenuBarButtons->setHovered(false);
+        }
+    }
+
+    KDecoration3::Decoration::mouseReleaseEvent(event);
+}
+
+void Decoration::hoverMoveEvent(QHoverEvent *event)
+{
+    QPointF position = event->position();
+    if (m_internalSettings->unisonHovering()) {
+        const bool groupContains = m_leftButtons->geometry().contains(position) || m_rightButtons->geometry().contains(position);
+        setButtonUnisonHovered(groupContains);
+    }
+
+    bool titleHovered = false;
+    bool dragStarted = false;
+    // Update AppMenuBar button showing state based on title hover
+    if (m_appMenuBarButtons) {
+        QRectF appMenuBarHoverArea = m_appMenuBarButtons->titleHoverArea();
+
+        const bool overAppMenuBarButtons = m_appMenuBarButtons && m_appMenuBarButtons->geometry().contains(position);
+        bool titleHovered = appMenuBarHoverArea.contains(position);
+        bool hovered = titleHovered;
+
+        dragStarted = m_appMenuBarButtons->dragMoveTick(position);
+        if (dragStarted) {
+            hovered = false;
+        }
+        m_appMenuBarButtons->setHovered(hovered);
+
+        if (!dragStarted && overAppMenuBarButtons && hovered)
+            m_appMenuBarButtons->handleHoverMove(position);
+    }
+
+    if (!titleHovered) {
+        KDecoration3::Decoration::hoverMoveEvent(event);
+    }
+}
+
+void Decoration::updateAppMenuBar()
+{
+    // Add/remove AppMenuBar buttons based on whether the application menu exists for the application
+    if (window()->hasApplicationMenu() && m_internalSettings->appMenuBarEnabled() && !m_appMenuBarButtons) {
+        m_appMenuBarButtons = new AppMenuButtonGroup(this);
+        connect(m_appMenuBarButtons, &AppMenuButtonGroup::menuUpdated, this, &Decoration::updateButtonsGeometry);
+        connect(m_appMenuBarButtons, &AppMenuButtonGroup::geometryAnimationChanged, this, &Decoration::updateButtonsGeometry);
+        m_appMenuBarButtons->updateAppMenuModel();
+    } else if ((!window()->hasApplicationMenu() || !m_internalSettings->appMenuBarEnabled()) && m_appMenuBarButtons) {
+        m_appMenuBarButtons->deleteLater();
+        m_appMenuBarButtons = nullptr;
+        setCaptionOpacity(1);
+    }
+    if (m_appMenuBarButtons)
+        m_appMenuBarButtons->reconfigure();
+}
+
+// used for AppMenuBar
+QPoint Decoration::windowPos() const
+{
+    if (KWindowSystem::isPlatformX11()) {
+        if (const auto *p = parent()) {
+            return p->property("clientGeometry").toRect().topLeft();
+        }
+    }
+    return QPoint(0, 0);
+}
+
+bool Decoration::appMenuBarBackgroundWindowColoredEnabled()
+{
+    return m_internalSettings->appMenuBarEnabled() && m_internalSettings->appMenuBarDrawBackgroundWindowColored();
+}
+
+bool Decoration::shouldPaintAppMenuBarBackgroundWindowColored()
+{
+    return appMenuBarBackgroundWindowColoredEnabled() && !m_toolsAreaWillBeDrawn && m_appMenuBarButtons && m_appMenuBarButtons->visibleWidth() > 1
+        && (m_appMenuBarButtons->showing() || m_appMenuBarButtons->behaviour() == AppMenuBehaviour::AlwaysExpandOnHover
+            || m_appMenuBarButtons->animation()->state() == QAbstractAnimation::Running);
+}
+
+std::tuple<QColor, QColor> Decoration::appMenuBarBackgroundColors()
+{
+    auto c = window();
+    QColor base = c->isActive() ? m_appMenuBarWindowColoredColors->active()->titleBarBase : m_appMenuBarWindowColoredColors->inactive()->titleBarBase;
+    QColor separator = this->titleBarSeparatorColor();
+
+    if (m_appMenuBarButtons->animation()->state() == QAbstractAnimation::Running && !m_appMenuBarButtons->risesOnHover()) {
+        qreal opacity = m_appMenuBarButtons->opacity();
+        if (base.isValid()) {
+            base = ColorTools::alphaMix(base, opacity);
+        }
+        if (separator.isValid()) {
+            separator = ColorTools::alphaMix(separator, opacity);
+        }
+    }
+    return std::tuple<QColor, QColor>(base, separator);
+}
+
+void Decoration::setAppMenuBarButtonCornerRadius()
+{
+    switch (m_internalSettings->appMenuBarButtonCornerRadius()) {
+    case InternalSettings::EnumAppMenuBarButtonCornerRadius::AMBCR_DerivedFromApplicationStyle:
+        m_appMenuBarButtonCornerRadius =
+            m_internalSettings->frameCornerRadius() ? m_internalSettings->frameCustomCornerRadius() : qMin(5.0, m_internalSettings->windowCornerRadius());
+        break;
+    case InternalSettings::EnumAppMenuBarButtonCornerRadius::AMBCR_DerivedFromWindowButton:
+        m_appMenuBarButtonCornerRadius =
+            m_internalSettings->buttonCornerRadius() ? m_internalSettings->buttonCustomCornerRadius() : m_internalSettings->windowCornerRadius();
+        break;
+    default:
+        m_appMenuBarButtonCornerRadius = m_internalSettings->appMenuBarButtonCustomCornerRadius();
+        break;
+    }
+    m_appMenuBarButtonCornerRadius *= x11Scale();
+    if (m_appMenuBarButtonCornerRadius < 0.1) {
+        m_appMenuBarButtonCornerRadius = 0;
+    }
+}
+
+void Decoration::setCaptionOpacity(qreal value)
+{
+    if (m_captionOpacity == value) {
+        return;
+    }
+    m_captionOpacity = value;
+    update();
+}
+
+std::shared_ptr<Decoration::TitleParams> Decoration::getTitleParams()
+{
+    QFont font = fontWithAddedWeight();
+    auto c = window();
+    qreal scale = window()->scale();
+    QFontMetricsF fontMetrics(font);
+
+    std::shared_ptr<TitleParams> titleParams = std::make_shared<TitleParams>();
+
+    titleParams->useRawTitle = m_internalSettings->showTitleDocumentName() && !m_internalSettings->showTitleAppIcon() && m_internalSettings->showTitleAppName();
+
+    titleParams->rawTitle = c->caption();
+    if (titleParams->useRawTitle) {
+        titleParams->maxTitleWidth = fontMetrics.boundingRect(titleParams->rawTitle).width();
+        titleParams->documentNameWidth = -1;
+        titleParams->appNameWidth = -1;
+        titleParams->appIconSpaceWidthAfter = -1;
+        titleParams->appIconSpaceWidthBefore = -1;
+        titleParams->appIconWidth = -1;
+    } else {
+        int emDashIndex = titleParams->rawTitle.lastIndexOf(QStringLiteral(" — "));
+        bool noEmDash = emDashIndex == -1;
+
+        titleParams->appNameIsRawTitle = false;
+        // set appName
+        if (m_internalSettings->showTitleAppName()) {
+            if (noEmDash) {
+                titleParams->appName = titleParams->rawTitle;
+                titleParams->appNameIsRawTitle = true;
+            } else {
+                int numCharsAfterEmDash = titleParams->rawTitle.size() - (emDashIndex + 3); // the emdash separator has 3 characters including spaces
+                titleParams->appName = titleParams->rawTitle.last(numCharsAfterEmDash);
+            }
+        } else {
+            titleParams->appName = QStringLiteral("");
+        }
+
+        // set documentName
+        if (m_internalSettings->showTitleDocumentName()) {
+            if (noEmDash) {
+                titleParams->documentName = QStringLiteral("");
+            } else {
+                titleParams->documentName = titleParams->rawTitle.first(emDashIndex);
+            }
+        } else {
+            titleParams->documentName = QStringLiteral("");
+        }
+
+        // calculate widths
+        titleParams->documentNameWidth = fontMetrics.boundingRect(titleParams->documentName).width();
+        titleParams->appNameWidth = fontMetrics.boundingRect(titleParams->appName).width();
+        titleParams->appIconSpaceWidthAfter = m_internalSettings->showTitleAppIcon() ? fontMetrics.boundingRect(QStringLiteral("-")).width()
+                                                                                     : 0; // have to use a dash as a space will return a size of 0
+        titleParams->appIconSpaceWidthBefore = titleParams->appIconSpaceWidthAfter * 2;
+        titleParams->appIconWidth = m_internalSettings->showTitleAppIcon() ? qRound(m_scaledIconSize) : 0; // QIcon paint only accepts integer
+        titleParams->maxTitleWidth = titleParams->documentNameWidth + titleParams->appIconWidth + titleParams->appIconSpaceWidthBefore
+            + titleParams->appIconSpaceWidthAfter + titleParams->appNameWidth;
+    }
+
+    titleParams->maxTitleWidthCeil = qCeil(titleParams->maxTitleWidth * scale) / scale;
+    return titleParams;
+}
+
+void Decoration::paintAppOrWindowIcon(QPainter *painter, QRect iconRect, QColor windowTextColor, bool paintWindowMenuIcon) const
+{
+    auto c = window();
+
+    KIconLoader *iconLoader = KIconLoader::global();
+    const QPalette originalPalette = iconLoader->customPalette();
+    QPalette palette = c->palette();
+    palette.setColor(QPalette::WindowText, windowTextColor);
+
+    iconLoader->setCustomPalette(palette);
+
+    if (paintWindowMenuIcon && m_internalSettings->showTitleAppIcon()) {
+        QIcon icon = QIcon::fromTheme(QStringLiteral("kde-symbolic"));
+        icon.paint(painter, iconRect);
+    } else {
+        painter->save();
+        painter->setOpacity(m_captionOpacity);
+        c->icon().paint(painter, iconRect);
+        painter->restore();
+    }
+    if (originalPalette == QPalette()) {
+        iconLoader->resetPalette();
+    } else {
+        iconLoader->setCustomPalette(originalPalette);
+    }
 }
 
 } // namespace

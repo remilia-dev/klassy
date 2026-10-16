@@ -11,6 +11,7 @@
 #include "klassycommon_export.h"
 #include <KColorScheme>
 #include <QColor>
+#include <QVariantAnimation>
 #include <memory>
 
 namespace Klassy
@@ -32,12 +33,21 @@ const QList<DecorationButtonType> coloredWindowDecorationButtonTypes{
     DecorationButtonType::KeepAbove,
     DecorationButtonType::Custom,
     DecorationButtonType::ExcludeFromCapture,
+    DecorationButtonType::CustomAppMenuBarMenu,
+    DecorationButtonType::CustomAppMenuBarOverflow,
+    DecorationButtonType::CustomAppMenuBarSearch,
 };
 
 const QList<DecorationButtonType> coloredAppStyleDecorationButtonTypes{
     DecorationButtonType::Minimize,
     DecorationButtonType::Maximize,
     DecorationButtonType::Close,
+};
+
+const QList<DecorationButtonType> coloredAppMenuBarWindowColoredDecorationButtonTypes{
+    DecorationButtonType::CustomAppMenuBarMenu,
+    DecorationButtonType::CustomAppMenuBarOverflow,
+    DecorationButtonType::CustomAppMenuBarSearch,
 };
 
 enum struct KLASSYCOMMON_EXPORT OverridableButtonColorState {
@@ -154,6 +164,17 @@ public:
                                                  const DecorationPaletteGroup *decorationColorsInactive,
                                                  const int overrideColorItemsIndex,
                                                  const bool active);
+
+    //* gets base button state colors with the active change state animation considered
+    QColor foregroundNormalActiveStateAnimated(const bool active, const QVariantAnimation *activeStateAnimation) const;
+    QColor foregroundHoverActiveStateAnimated(const bool active, const QVariantAnimation *activeStateAnimation) const;
+    QColor foregroundPressActiveStateAnimated(const bool active, const QVariantAnimation *activeStateAnimation) const;
+    QColor backgroundNormalActiveStateAnimated(const bool active, const QVariantAnimation *activeStateAnimation) const;
+    QColor backgroundHoverActiveStateAnimated(const bool active, const QVariantAnimation *activeStateAnimation) const;
+    QColor backgroundPressActiveStateAnimated(const bool active, const QVariantAnimation *activeStateAnimation) const;
+    QColor outlineNormalActiveStateAnimated(const bool active, const QVariantAnimation *activeStateAnimation) const;
+    QColor outlineHoverActiveStateAnimated(const bool active, const QVariantAnimation *activeStateAnimation) const;
+    QColor outlinePressActiveStateAnimated(const bool active, const QVariantAnimation *activeStateAnimation) const;
 
 private:
     void decodeButtonOverrideColors(const bool active);

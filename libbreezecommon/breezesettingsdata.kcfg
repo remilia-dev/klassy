@@ -10,6 +10,23 @@
     <entry name="LookAndFeelSet" type="String" />
   </group>
 
+  <!-- used to provide access to the application-style corner radius -->
+  <group name="Style">
+    <entry name="FrameCornerRadius" type="Enum">
+      <choices>
+          <choice name="FCR_DerivedFromWindow" />
+          <choice name="FCR_Custom" />
+      </choices>
+      <default>FCR_DerivedFromWindow</default>
+    </entry>
+
+    <entry name="FrameCustomCornerRadius" type="Double">
+      <default>3.0</default>
+      <min>0</min>
+      <max>24.0</max>
+    </entry>
+  </group>
+
   <group name="Windeco">
     
     <!-- ______________________________BUTTONS______________________________ -->
@@ -102,7 +119,23 @@
 
     <!-- ______________________________TITLEBAR______________________________ -->
 
+    <entry name="ShowTitleDocumentName" type = "Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="ShowTitleAppIcon" type = "Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="ShowTitleAppName" type = "Bool">
+        <default>true</default>
+    </entry>
+
     <entry name="MatchTitleBarToApplicationColor" type = "Bool">
+        <default>false</default>
+    </entry>
+
+    <entry name="AppMenuBarEnabled" type="Bool">
         <default>false</default>
     </entry>
 
@@ -442,6 +475,9 @@
                 <value>KeepBelow</value>
                 <value>KeepAbove</value>
                 <value>ExcludeFromCapture</value>
+                <value>AppMenuBarMenu</value>
+                <value>AppMenuBarOverflow</value>
+                <value>AppMenuBarSearch</value>
             </values>
         </parameter>
     </entry>
@@ -460,6 +496,9 @@
                 <value>KeepBelow</value>
                 <value>KeepAbove</value>
                 <value>ExcludeFromCapture</value>
+                <value>AppMenuBarMenu</value>
+                <value>AppMenuBarOverflow</value>
+                <value>AppMenuBarSearch</value>
             </values>
         </parameter>
     </entry>
@@ -843,6 +882,17 @@
   </group>
 
   <group name="TitleBarSpacing">
+
+    <entry name="TitleAlignment" type="Enum">
+        <choices>
+            <choice name="AlignLeft" />
+            <choice name="AlignCenter" />
+            <choice name="AlignCenterFullWidth" />
+            <choice name="AlignRight" />
+        </choices>
+        <default>AlignCenterFullWidth</default>
+    </entry>
+
     <entry name="TitleBarTopMargin" type = "Double">
        <default>3.6</default>
        <min>0</min>
@@ -873,17 +923,6 @@
 
     <entry name="LockTitleBarLeftRightMargins" type = "Bool">
         <default>true</default>
-    </entry>
-
-    <!-- title alignment -->
-    <entry name="TitleAlignment" type="Enum">
-      <choices>
-          <choice name="AlignLeft" />
-          <choice name="AlignCenter" />
-          <choice name="AlignCenterFullWidth" />
-          <choice name="AlignRight" />
-      </choices>
-      <default>AlignCenterFullWidth</default>
     </entry>
 
     <!-- Title side padding -->
@@ -937,6 +976,113 @@
     </entry>
 
     <entry name="OverrideTitleBarOpacityInactive" type = "Bool">
+        <default>false</default>
+    </entry>
+
+  </group>
+
+  <group name="TitleBarAppMenuBar">
+    <!-- ______________________________APP MENUBAR______________________________ -->
+
+    <entry name="AppMenuBarBehaviour" type="Enum">
+        <choices>
+            <choice name="AlwaysExpandOnHover" />
+            <choice name="AlwaysTakeRoom" />
+            <choice name="RevealOnHover" />
+            <choice name="ReplaceTitleOnHover" />
+            <choice name="SearchOnly" />
+        </choices>
+        <default>AlwaysExpandOnHover</default>
+    </entry>
+
+    <entry name="AppMenuBarPosition" type="Enum">
+        <choices>
+            <choice name="Left" />
+            <choice name="Center" />
+            <choice name="CenterFullWidth" />
+            <choice name="Right" />
+        </choices>
+        <default>Left</default>
+    </entry>
+
+    <entry name="AppMenuBarReplacesMenuButton" type="Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="AppMenuBarDrawBackgroundWindowColored" type="Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="AppMenuBarEnableBlur" type="Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="AppMenuBarBlurCornerRadius" type="Enum">
+        <choices>
+            <choice name="AMBBCR_DerivedFromApplicationStyle" />
+            <choice name="AMBBCR_Custom" />
+        </choices>
+        <default>AMBBCR_DerivedFromApplicationStyle</default>
+    </entry>
+
+    <entry name="AppMenuBarBlurCustomCornerRadius" type="Double">
+        <default>5.0</default>
+        <min>0</min>
+        <max>24.0</max>
+    </entry>
+
+    <entry name="AppMenuBarButtonShape" type="Enum">
+        <choices>
+            <choice name="FullHeightRoundedRectangle" />
+            <choice name="RoundedRectangle" />
+        </choices>
+        <default>FullHeightRoundedRectangle</default>
+    </entry>
+
+    <entry name="AppMenuBarButtonHorizontalMargin" type="Double">
+        <default>5.0</default>
+    </entry>
+
+    <entry name="AppMenuBarButtonHorizontalSpacing" type="Double">
+        <default>1.0</default>
+    </entry>
+
+    <entry name="AppMenuBarButtonCornerRadius" type="Enum">
+        <choices>
+            <choice name="AMBCR_DerivedFromApplicationStyle" />
+            <choice name="AMBCR_DerivedFromWindowButton" />
+            <choice name="AMBCR_Custom" />
+        </choices>
+        <default>AMBCR_DerivedFromApplicationStyle</default>
+    </entry>
+
+    <entry name="AppMenuBarButtonCustomCornerRadius" type="Double">
+        <default>5.0</default>
+        <min>0</min>
+        <max>24.0</max>
+    </entry>
+
+    <entry name="AppMenuBarButtonUseSystemMenuFont" type="Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="AppMenuBarButtonCanDragWindow" type="Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="AppMenuBarSearchEnabled" type="Bool">
+        <default>false</default>
+    </entry>
+
+    <entry name="AppMenuBarSearchIgnoreDisabled" type="Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="AppMenuBarSearchIgnoreTopLevel" type="Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="AppMenuBarSearchIgnoreSubMenus" type="Bool">
         <default>false</default>
     </entry>
 
@@ -1118,21 +1264,57 @@
 
     <group name="Exceptions">
       <!-- hide title bar (exception) -->
+
+    <entry name="HideTitleBarChecked" type = "Bool">
+        <default>false</default>
+    </entry>
+
     <entry name="HideTitleBar" type = "Enum">
         <choices>
-            <choice name="Never" />
             <choice name="Always" />
             <choice name="Maximized" />
             <choice name="AnyMaximization" />
             <choice name="KeptBehind" />
             <choice name="AnyMaximizationOrKeptBehind" />
         </choices>
-       <default>Never</default>
+       <default>Always</default>
+    </entry>
+
+    <entry name="ExceptionShowInTitle" type = "Bool">
+        <default>false</default>
+    </entry>
+
+    <entry name="ExceptionShowTitleDocumentName" type = "Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="ExceptionShowTitleAppIcon" type = "Bool">
+        <default>true</default>
+    </entry>
+
+    <entry name="ExceptionShowTitleAppName" type = "Bool">
+        <default>true</default>
     </entry>
 
     <!-- opaque title bar (exception) -->
     <entry name="OpaqueTitleBar" type = "Bool">
        <default>false</default>
+    </entry>
+
+    <entry name="ExceptionAppMenuBarBehaviourChecked" type = "Bool">
+        <default>false</default>
+    </entry>
+
+    <entry name="ExceptionAppMenuBarBehaviour" type="Enum">
+        <choices>
+            <choice name="NoOverride" />
+            <choice name="AlwaysExpandOnHover" />
+            <choice name="AlwaysTakeRoom" />
+            <choice name="RevealOnHover" />
+            <choice name="ReplaceTitleOnHover" />
+            <choice name="SearchOnly" />
+        </choices>
+        <default>NoOverride</default>
     </entry>
 
     <entry name="ExceptionMatchTitleBarToApplicationColor" type = "Bool">

@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QVariantAnimation>
 
 namespace Klassy
 {
@@ -240,6 +241,174 @@ QColor DecorationButtonPalette::overrideColorItemsIndexToColor(const DecorationP
         return decorationColorsActive->shadow;
     case 27:
         return decorationColorsInactive->shadow;
+    }
+}
+
+QColor DecorationButtonPalette::foregroundNormalActiveStateAnimated(const bool isActive, const QVariantAnimation *activeStateAnimation) const
+{
+    if (activeStateAnimation && activeStateAnimation->state() == QAbstractAnimation::Running) {
+        qreal opacity = activeStateAnimation->currentValue().toReal();
+        if (active()->foregroundNormal.isValid() && inactive()->foregroundNormal.isValid()) {
+            return KColorUtils::mix(inactive()->foregroundNormal, active()->foregroundNormal, opacity);
+        } else if (active()->foregroundNormal.isValid() && !inactive()->foregroundNormal.isValid()) {
+            return ColorTools::alphaMix(active()->foregroundNormal, opacity);
+        } else if (!active()->foregroundNormal.isValid() && inactive()->foregroundNormal.isValid()) {
+            return ColorTools::alphaMix(inactive()->foregroundNormal, (1.0 - opacity));
+        } else {
+            return QColor();
+        }
+    } else {
+        const DecorationButtonPaletteGroup *group = isActive ? active() : inactive();
+        return group->foregroundNormal;
+    }
+}
+
+QColor DecorationButtonPalette::foregroundHoverActiveStateAnimated(const bool isActive, const QVariantAnimation *activeStateAnimation) const
+{
+    if (activeStateAnimation && activeStateAnimation->state() == QAbstractAnimation::Running) {
+        qreal opacity = activeStateAnimation->currentValue().toReal();
+        if (active()->foregroundHover.isValid() && inactive()->foregroundHover.isValid()) {
+            return KColorUtils::mix(inactive()->foregroundHover, active()->foregroundHover, opacity);
+        } else if (active()->foregroundHover.isValid() && !inactive()->foregroundHover.isValid()) {
+            return ColorTools::alphaMix(active()->foregroundHover, opacity);
+        } else if (!active()->foregroundHover.isValid() && inactive()->foregroundHover.isValid()) {
+            return ColorTools::alphaMix(inactive()->foregroundHover, (1.0 - opacity));
+        } else {
+            return QColor();
+        }
+    } else {
+        const DecorationButtonPaletteGroup *group = isActive ? active() : inactive();
+        return group->foregroundHover;
+    }
+}
+
+QColor DecorationButtonPalette::foregroundPressActiveStateAnimated(const bool isActive, const QVariantAnimation *activeStateAnimation) const
+{
+    if (activeStateAnimation && activeStateAnimation->state() == QAbstractAnimation::Running) {
+        qreal opacity = activeStateAnimation->currentValue().toReal();
+        if (active()->foregroundPress.isValid() && inactive()->foregroundPress.isValid()) {
+            return KColorUtils::mix(inactive()->foregroundPress, active()->foregroundPress, opacity);
+        } else if (active()->foregroundPress.isValid() && !inactive()->foregroundPress.isValid()) {
+            return ColorTools::alphaMix(active()->foregroundPress, opacity);
+        } else if (!active()->foregroundPress.isValid() && inactive()->foregroundPress.isValid()) {
+            return ColorTools::alphaMix(inactive()->foregroundPress, (1.0 - opacity));
+        } else
+            return QColor();
+    } else {
+        const DecorationButtonPaletteGroup *group = isActive ? active() : inactive();
+        return group->foregroundPress;
+    }
+}
+
+QColor DecorationButtonPalette::backgroundNormalActiveStateAnimated(const bool isActive, const QVariantAnimation *activeStateAnimation) const
+{
+    if (activeStateAnimation && activeStateAnimation->state() == QAbstractAnimation::Running) {
+        qreal opacity = activeStateAnimation->currentValue().toReal();
+        if (active()->backgroundNormal.isValid() && inactive()->backgroundNormal.isValid()) {
+            return KColorUtils::mix(inactive()->backgroundNormal, active()->backgroundNormal, opacity);
+        } else if (active()->backgroundNormal.isValid() && !inactive()->backgroundNormal.isValid()) {
+            return ColorTools::alphaMix(active()->backgroundNormal, opacity);
+        } else if (!active()->backgroundNormal.isValid() && inactive()->backgroundNormal.isValid()) {
+            return ColorTools::alphaMix(inactive()->backgroundNormal, (1.0 - opacity));
+        } else {
+            return QColor();
+        }
+    } else {
+        const DecorationButtonPaletteGroup *group = isActive ? active() : inactive();
+        return group->backgroundNormal;
+    }
+}
+
+QColor DecorationButtonPalette::backgroundHoverActiveStateAnimated(const bool isActive, const QVariantAnimation *activeStateAnimation) const
+{
+    if (activeStateAnimation && activeStateAnimation->state() == QAbstractAnimation::Running) {
+        qreal opacity = activeStateAnimation->currentValue().toReal();
+        if (active()->backgroundHover.isValid() && inactive()->backgroundHover.isValid()) {
+            return KColorUtils::mix(inactive()->backgroundHover, active()->backgroundHover, opacity);
+        } else if (active()->backgroundHover.isValid() && !inactive()->backgroundHover.isValid()) {
+            return ColorTools::alphaMix(active()->backgroundHover, opacity);
+        } else if (!active()->backgroundHover.isValid() && inactive()->backgroundHover.isValid()) {
+            return ColorTools::alphaMix(inactive()->backgroundHover, (1.0 - opacity));
+        } else {
+            return QColor();
+        }
+    } else {
+        const DecorationButtonPaletteGroup *group = isActive ? active() : inactive();
+        return group->backgroundHover;
+    }
+}
+
+QColor DecorationButtonPalette::backgroundPressActiveStateAnimated(const bool isActive, const QVariantAnimation *activeStateAnimation) const
+{
+    if (activeStateAnimation && activeStateAnimation->state() == QAbstractAnimation::Running) {
+        qreal opacity = activeStateAnimation->currentValue().toReal();
+        if (active()->backgroundPress.isValid() && inactive()->backgroundPress.isValid()) {
+            return KColorUtils::mix(inactive()->backgroundPress, active()->backgroundPress, opacity);
+        } else if (active()->backgroundPress.isValid() && !inactive()->backgroundPress.isValid()) {
+            return ColorTools::alphaMix(active()->backgroundPress, opacity);
+        } else if (!active()->backgroundPress.isValid() && inactive()->backgroundPress.isValid()) {
+            return ColorTools::alphaMix(inactive()->backgroundPress, (1.0 - opacity));
+        } else
+            return QColor();
+    } else {
+        const DecorationButtonPaletteGroup *group = isActive ? active() : inactive();
+        return group->backgroundPress;
+    }
+}
+
+QColor DecorationButtonPalette::outlineNormalActiveStateAnimated(const bool isActive, const QVariantAnimation *activeStateAnimation) const
+{
+    if (activeStateAnimation && activeStateAnimation->state() == QAbstractAnimation::Running) {
+        qreal opacity = activeStateAnimation->currentValue().toReal();
+        if (active()->outlineNormal.isValid() && inactive()->outlineNormal.isValid()) {
+            return KColorUtils::mix(inactive()->outlineNormal, active()->outlineNormal, opacity);
+        } else if (active()->outlineNormal.isValid() && !inactive()->outlineNormal.isValid()) {
+            return ColorTools::alphaMix(active()->outlineNormal, opacity);
+        } else if (!active()->outlineNormal.isValid() && inactive()->outlineNormal.isValid()) {
+            return ColorTools::alphaMix(inactive()->outlineNormal, (1.0 - opacity));
+        } else {
+            return QColor();
+        }
+    } else {
+        const DecorationButtonPaletteGroup *group = isActive ? active() : inactive();
+        return group->outlineNormal;
+    }
+}
+
+QColor DecorationButtonPalette::outlineHoverActiveStateAnimated(const bool isActive, const QVariantAnimation *activeStateAnimation) const
+{
+    if (activeStateAnimation && activeStateAnimation->state() == QAbstractAnimation::Running) {
+        qreal opacity = activeStateAnimation->currentValue().toReal();
+        if (active()->outlineHover.isValid() && inactive()->outlineHover.isValid()) {
+            return KColorUtils::mix(inactive()->outlineHover, active()->outlineHover, opacity);
+        } else if (active()->outlineHover.isValid() && !inactive()->outlineHover.isValid()) {
+            return ColorTools::alphaMix(active()->outlineHover, opacity);
+        } else if (!active()->outlineHover.isValid() && inactive()->outlineHover.isValid()) {
+            return ColorTools::alphaMix(inactive()->outlineHover, (1.0 - opacity));
+        } else {
+            return QColor();
+        }
+    } else {
+        const DecorationButtonPaletteGroup *group = isActive ? active() : inactive();
+        return group->outlineHover;
+    }
+}
+
+QColor DecorationButtonPalette::outlinePressActiveStateAnimated(const bool isActive, const QVariantAnimation *activeStateAnimation) const
+{
+    if (activeStateAnimation && activeStateAnimation->state() == QAbstractAnimation::Running) {
+        qreal opacity = activeStateAnimation->currentValue().toReal();
+        if (active()->outlinePress.isValid() && inactive()->outlinePress.isValid()) {
+            return KColorUtils::mix(inactive()->outlinePress, active()->outlinePress, opacity);
+        } else if (active()->outlinePress.isValid() && !inactive()->outlinePress.isValid()) {
+            return ColorTools::alphaMix(active()->outlinePress, opacity);
+        } else if (!active()->outlinePress.isValid() && inactive()->outlinePress.isValid()) {
+            return ColorTools::alphaMix(inactive()->outlinePress, (1.0 - opacity));
+        } else
+            return QColor();
+    } else {
+        const DecorationButtonPaletteGroup *group = isActive ? active() : inactive();
+        return group->outlinePress;
     }
 }
 
@@ -527,12 +696,27 @@ void DecorationButtonPalette::generateButtonBackgroundPalette(const bool active)
 
     bool defaultButton =
         true; // flag indicates the button has standard colours for the behaviour and selected colour (i.e. is not a close/max/min with special colours)
-    const bool &drawBackgroundNormally = (_buttonType == DecorationButtonType::Close) ? _decorationSettings->showCloseBackgroundNormally(active)
-                                                                                      : _decorationSettings->showBackgroundNormally(active);
-    const bool &drawBackgroundOnHover = (_buttonType == DecorationButtonType::Close) ? _decorationSettings->showCloseBackgroundOnHover(active)
-                                                                                     : _decorationSettings->showBackgroundOnHover(active);
-    const bool &drawBackgroundOnPress = (_buttonType == DecorationButtonType::Close) ? _decorationSettings->showCloseBackgroundOnPress(active)
-                                                                                     : _decorationSettings->showBackgroundOnPress(active);
+
+    bool drawBackgroundNormally, drawBackgroundOnHover, drawBackgroundOnPress;
+    switch (_buttonType) {
+    default:
+        drawBackgroundNormally = _decorationSettings->showBackgroundNormally(active);
+        drawBackgroundOnHover = _decorationSettings->showBackgroundOnHover(active);
+        drawBackgroundOnPress = _decorationSettings->showBackgroundOnPress(active);
+        break;
+    case DecorationButtonType::Close:
+        drawBackgroundNormally = _decorationSettings->showCloseBackgroundNormally(active);
+        drawBackgroundOnHover = _decorationSettings->showCloseBackgroundOnHover(active);
+        drawBackgroundOnPress = _decorationSettings->showCloseBackgroundOnPress(active);
+        break;
+    case DecorationButtonType::CustomAppMenuBarMenu:
+    case DecorationButtonType::CustomAppMenuBarOverflow:
+    case DecorationButtonType::CustomAppMenuBarSearch:
+        drawBackgroundNormally = false;
+        drawBackgroundOnHover = true;
+        drawBackgroundOnPress = true;
+        break;
+    }
 
     const bool replaceWithActiveHoverPress = !active && _decorationSettings->buttonColorsInactiveSameHoverPress();
 
@@ -733,8 +917,8 @@ void DecorationButtonPalette::generateButtonForegroundPalette(const bool active)
     const int buttonIconColors = _decorationSettings->buttonIconColors(active);
     const int closeButtonIconColor = _decorationSettings->closeButtonIconColor(active);
 
-    bool defaultButton =
-        true; // flag indicates the button has standard colours for the behaviour and selected colour (i.e. is not a close/max/min with special colours)
+    bool defaultButton = true; // flag indicates the button has standard colours for the behaviour and selected colour (i.e. is not a close/max/min with special
+                               // colours and is not an AppMenuBar text button)
 
     const bool &drawIconNormally =
         (_buttonType == DecorationButtonType::Close) ? _decorationSettings->showCloseIconNormally(active) : _decorationSettings->showIconNormally(active);
@@ -917,6 +1101,14 @@ void DecorationButtonPalette::generateButtonForegroundPalette(const bool active)
         }
     }
 
+    if (_buttonType == DecorationButtonType::CustomAppMenuBarMenu) {
+        // AppMenuBar buttons default to using the titlebar text to ensure they're legible
+        defaultButton = false;
+        foregroundNormal = decorationColors->titleBarText;
+        foregroundHover = decorationColors->titleBarText;
+        foregroundPress = decorationColors->titleBarText;
+    }
+
     if (defaultButton) {
         QColor defaultButtonColor;
         switch (buttonIconColors) {
@@ -1030,12 +1222,27 @@ void DecorationButtonPalette::generateButtonOutlinePalette(const bool active)
 
     bool defaultButton =
         true; // flag indicates the button has standard colours for the behaviour and selected colour (i.e. is not a close/max/min with special colours)
-    const bool &drawOutlineNormally =
-        (_buttonType == DecorationButtonType::Close) ? _decorationSettings->showCloseOutlineNormally(active) : _decorationSettings->showOutlineNormally(active);
-    const bool &drawOutlineOnHover =
-        (_buttonType == DecorationButtonType::Close) ? _decorationSettings->showCloseOutlineOnHover(active) : _decorationSettings->showOutlineOnHover(active);
-    const bool &drawOutlineOnPress =
-        (_buttonType == DecorationButtonType::Close) ? _decorationSettings->showCloseOutlineOnPress(active) : _decorationSettings->showOutlineOnPress(active);
+
+    bool drawOutlineNormally, drawOutlineOnHover, drawOutlineOnPress;
+    switch (_buttonType) {
+    default:
+        drawOutlineNormally = _decorationSettings->showOutlineNormally(active);
+        drawOutlineOnHover = _decorationSettings->showOutlineOnHover(active);
+        drawOutlineOnPress = _decorationSettings->showOutlineOnPress(active);
+        break;
+    case DecorationButtonType::Close:
+        drawOutlineNormally = _decorationSettings->showCloseOutlineNormally(active);
+        drawOutlineOnHover = _decorationSettings->showCloseOutlineOnHover(active);
+        drawOutlineOnPress = _decorationSettings->showCloseOutlineOnPress(active);
+        break;
+    case DecorationButtonType::CustomAppMenuBarMenu:
+    case DecorationButtonType::CustomAppMenuBarOverflow:
+    case DecorationButtonType::CustomAppMenuBarSearch:
+        drawOutlineNormally = false;
+        drawOutlineOnHover = true;
+        drawOutlineOnPress = true;
+        break;
+    }
 
     const bool replaceWithActiveHoverPress = !active && _decorationSettings->buttonColorsInactiveSameHoverPress();
 

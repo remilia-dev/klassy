@@ -19,6 +19,7 @@
 #include "loadpreset.h"
 #include "shadowstyle.h"
 #include "systemicongeneration.h"
+#include "titlebarappmenubar.h"
 #include "titlebaropacity.h"
 #include "titlebarspacing.h"
 #include "ui_breezeconfigurationui.h"
@@ -131,12 +132,15 @@ protected Q_SLOTS:
     void buttonBehaviourButtonClicked();
     void titleBarSpacingButtonClicked();
     void titleBarOpacityButtonClicked();
+    void titleBarAppMenuBarButtonClicked();
     void shadowStyleButtonClicked();
     void windowOutlineStyleButtonClicked();
     void presetsButtonClicked();
     void dialogChanged(bool changed);
     void kPageWidgetChanged(KPageWidgetItem *current, KPageWidgetItem *before);
     void updateWindowControlPreviewIcons();
+    void getButtonsOrderFromKwinConfig();
+    void setAppMenuBarButtonEnabledState();
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
@@ -152,6 +156,9 @@ private:
 
     //* presets kconfiguration object
     KSharedConfig::Ptr m_presetsConfiguration;
+
+    //* presets kconfiguration object
+    KSharedConfig::Ptr m_kwinConfiguration;
 
     //* internal exception
     InternalSettingsPtr m_internalSettings;
@@ -174,6 +181,7 @@ private:
     ButtonBehaviour *m_buttonBehaviourDialog;
     TitleBarSpacing *m_titleBarSpacingDialog;
     TitleBarOpacity *m_titleBarOpacityDialog;
+    TitleBarAppMenuBar *m_titleBarMenuDialog;
     ShadowStyle *m_shadowStyleDialog;
     WindowOutlineStyle *m_windowOutlineStyleDialog;
     LoadPreset *m_loadPresetDialog;
@@ -183,6 +191,8 @@ private:
     QIcon m_unlockedIcon;
     QIcon m_lockedIcon;
     QIcon m_lockIcon; // bistate with both unlocked and locked
+
+    bool m_hasApplicationMenu;
 
     TaskManagerType m_taskManagerType = TaskManagerType::IconsAndTextTaskManager;
     Side m_taskManagerSide = SideBottom;
@@ -194,6 +204,8 @@ private:
     void importBundledPresets();
     void updateIcons();
     void generateWindowControlPreviewIcon(QSize size, InternalSettings::EnumButtonIconStyle::type iconStyle);
-    void getButtonsOrderFromKwinConfig();
+
+    void setAppMenuBarEnabledCheckBoxState();
+    void setAppMenuButtonInKwinConfig();
 };
 }

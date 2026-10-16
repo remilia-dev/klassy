@@ -25,7 +25,7 @@ ExceptionDialog::ExceptionDialog(KSharedConfig::Ptr config, KSharedConfig::Ptr p
 
     // disable controls if this is the default exceptions list
     QWidget *parentExceptionListWidget = parentWidget();
-    if (parentExceptionListWidget && parentExceptionListWidget->objectName() == "defaultExceptions") {
+    if (parentExceptionListWidget && parentExceptionListWidget->objectName() == "bundledExceptions") {
         m_ui.borderSizeCheckBox->setDisabled(true);
         m_ui.borderSizeComboBox->setDisabled(true);
         m_ui.detectDialogButton->setDisabled(true);
@@ -33,8 +33,15 @@ ExceptionDialog::ExceptionDialog(KSharedConfig::Ptr config, KSharedConfig::Ptr p
         m_ui.exceptionProgramNameEditor->setDisabled(true);
         m_ui.exceptionWindowPropertyEditor->setDisabled(true);
         m_ui.exceptionWindowPropertyType->setDisabled(true);
+        m_ui.exceptionHideTitleBarCheckBox->setDisabled(true);
         m_ui.hideTitleBar->setDisabled(true);
+        m_ui.exceptionShowInTitle->setDisabled(true);
+        m_ui.exceptionShowTitleDocumentName->setDisabled(true);
+        m_ui.exceptionShowTitleAppIcon->setDisabled(true);
+        m_ui.exceptionShowTitleAppName->setDisabled(true);
         m_ui.opaqueTitleBar->setDisabled(true);
+        m_ui.appMenuBarBehaviourCheckBox->setDisabled(true);
+        m_ui.appMenuBarBehaviour->setDisabled(true);
         m_ui.exceptionMatchTitleBarToApplicationColor->setDisabled(true);
         m_ui.preventApplyOpacityToHeader->setDisabled(true);
         m_ui.exceptionPresetCheckBox->setDisabled(true);
@@ -63,7 +70,16 @@ ExceptionDialog::ExceptionDialog(KSharedConfig::Ptr config, KSharedConfig::Ptr p
     connect(m_ui.exceptionWindowPropertyEditor, &QLineEdit::textChanged, this, &ExceptionDialog::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.borderSizeComboBox, SIGNAL(currentIndexChanged(int)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
     connect(m_ui.borderSizeCheckBox, &QAbstractButton::clicked, this, &ExceptionDialog::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.exceptionHideTitleBarCheckBox, &QAbstractButton::clicked, this, &ExceptionDialog::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.hideTitleBar, SIGNAL(currentIndexChanged(int)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
+
+    connect(m_ui.exceptionShowInTitle, &QAbstractButton::clicked, this, &ExceptionDialog::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.exceptionShowTitleDocumentName, &QAbstractButton::clicked, this, &ExceptionDialog::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.exceptionShowTitleAppIcon, &QAbstractButton::clicked, this, &ExceptionDialog::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.exceptionShowTitleAppName, &QAbstractButton::clicked, this, &ExceptionDialog::updateChanged, Qt::ConnectionType::DirectConnection);
+
+    connect(m_ui.appMenuBarBehaviourCheckBox, &QAbstractButton::clicked, this, &ExceptionDialog::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.appMenuBarBehaviour, SIGNAL(currentIndexChanged(int)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
     connect(m_ui.opaqueTitleBar, &QAbstractButton::clicked, this, &ExceptionDialog::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.exceptionMatchTitleBarToApplicationColor,
             &QAbstractButton::clicked,
@@ -101,7 +117,14 @@ void ExceptionDialog::setException(InternalSettingsPtr exception)
     }
 
     m_ui.borderSizeComboBox->setCurrentIndex(m_exception->borderSize());
+    m_ui.exceptionHideTitleBarCheckBox->setChecked(m_exception->hideTitleBarChecked());
     m_ui.hideTitleBar->setCurrentIndex(m_exception->hideTitleBar());
+    m_ui.exceptionShowInTitle->setChecked(m_exception->exceptionShowInTitle());
+    m_ui.exceptionShowTitleDocumentName->setChecked(m_exception->exceptionShowTitleDocumentName());
+    m_ui.exceptionShowTitleAppIcon->setChecked(m_exception->exceptionShowTitleAppIcon());
+    m_ui.exceptionShowTitleAppName->setChecked(m_exception->exceptionShowTitleAppName());
+    m_ui.appMenuBarBehaviourCheckBox->setChecked(m_exception->exceptionAppMenuBarBehaviourChecked());
+    m_ui.appMenuBarBehaviour->setCurrentIndex(m_exception->exceptionAppMenuBarBehaviour());
     m_ui.opaqueTitleBar->setChecked(m_exception->opaqueTitleBar());
     m_ui.exceptionMatchTitleBarToApplicationColor->setChecked(m_exception->exceptionMatchTitleBarToApplicationColor());
     m_ui.preventApplyOpacityToHeader->setChecked(m_exception->preventApplyOpacityToHeader());
@@ -125,7 +148,14 @@ void ExceptionDialog::save()
     }
 
     m_exception->setBorderSize(m_ui.borderSizeComboBox->currentIndex());
+    m_exception->setHideTitleBarChecked(m_ui.exceptionHideTitleBarCheckBox->isChecked());
     m_exception->setHideTitleBar(m_ui.hideTitleBar->currentIndex());
+    m_exception->setExceptionShowInTitle(m_ui.exceptionShowInTitle->isChecked());
+    m_exception->setExceptionShowTitleDocumentName(m_ui.exceptionShowTitleDocumentName->isChecked());
+    m_exception->setExceptionShowTitleAppIcon(m_ui.exceptionShowTitleAppIcon->isChecked());
+    m_exception->setExceptionShowTitleAppName(m_ui.exceptionShowTitleAppName->isChecked());
+    m_exception->setExceptionAppMenuBarBehaviourChecked(m_ui.appMenuBarBehaviourCheckBox->isChecked());
+    m_exception->setExceptionAppMenuBarBehaviour(m_ui.appMenuBarBehaviour->currentIndex());
     m_exception->setOpaqueTitleBar(m_ui.opaqueTitleBar->isChecked());
     m_exception->setExceptionMatchTitleBarToApplicationColor(m_ui.exceptionMatchTitleBarToApplicationColor->isChecked());
     m_exception->setPreventApplyOpacityToHeader(m_ui.preventApplyOpacityToHeader->isChecked());
@@ -149,7 +179,21 @@ void ExceptionDialog::updateChanged()
         modified = true;
     else if (m_exception->borderSize() != m_ui.borderSizeComboBox->currentIndex())
         modified = true;
+    else if (m_exception->hideTitleBarChecked() != m_ui.exceptionHideTitleBarCheckBox->isChecked())
+        modified = true;
     else if (m_exception->hideTitleBar() != m_ui.hideTitleBar->currentIndex())
+        modified = true;
+    else if (m_exception->exceptionShowInTitle() != m_ui.exceptionShowInTitle->isChecked())
+        modified = true;
+    else if (m_exception->exceptionShowTitleDocumentName() != m_ui.exceptionShowTitleDocumentName->isChecked())
+        modified = true;
+    else if (m_exception->exceptionShowTitleAppIcon() != m_ui.exceptionShowTitleAppIcon->isChecked())
+        modified = true;
+    else if (m_exception->exceptionShowTitleAppName() != m_ui.exceptionShowTitleAppName->isChecked())
+        modified = true;
+    else if (m_exception->exceptionAppMenuBarBehaviourChecked() != m_ui.appMenuBarBehaviourCheckBox->isChecked())
+        modified = true;
+    else if (m_exception->exceptionAppMenuBarBehaviour() != m_ui.appMenuBarBehaviour->currentIndex())
         modified = true;
     else if (m_exception->opaqueTitleBar() != m_ui.opaqueTitleBar->isChecked())
         modified = true;

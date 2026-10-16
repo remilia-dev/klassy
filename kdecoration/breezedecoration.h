@@ -19,6 +19,7 @@
 #include <KDecoration3/DecorationSettings>
 #include <KSharedConfig>
 
+#include <QFont>
 #include <QPainterPath>
 #include <QPalette>
 #include <QVariant>
@@ -68,6 +69,29 @@ public:
 
     //* caption height
     qreal captionHeight() const;
+    void setCaptionOpacity(qreal);
+    qreal captionOpacity() const
+    {
+        return m_captionOpacity;
+    }
+
+    struct TitleParams {
+        bool useRawTitle;
+        QString rawTitle;
+        QString documentName;
+        QString appName;
+        qreal documentNameWidth;
+        qreal appNameWidth;
+        qreal appIconSpaceWidthAfter;
+        qreal appIconSpaceWidthBefore;
+        int appIconWidth;
+        qreal maxTitleWidth;
+        qreal maxTitleWidthCeil;
+        bool appNameIsRawTitle;
+    };
+    std::shared_ptr<TitleParams> getTitleParams();
+    //* return the rect in which caption will be drawn
+    QPair<QRectF, Qt::Alignment> captionRect(std::shared_ptr<TitleParams>) const;
 
     //*@name active state change animation
     //@{
@@ -77,7 +101,6 @@ public:
     {
         return m_opacity;
     }
-
     //@}
 
     //*@name colors
@@ -87,12 +110,28 @@ public:
         return m_decorationColors.get();
     }
 
+    DecorationColors *appMenuBarWindowColoredColors()
+    {
+        return m_appMenuBarWindowColoredColors.get();
+    }
+
     QColor titleBarColor(bool returnNonAnimatedColor = false) const;
     QColor titleBarSeparatorColor() const;
     QColor fontColor(bool returnNonAnimatedColor = false) const;
     QColor overriddenOutlineColorAnimateIn() const;
     QColor overriddenOutlineColorAnimateOut(const QColor &destinationColor);
     //@}
+
+    //*@name TitleBarAppMenuBar
+    //@{
+    void updateAppMenuBar();
+    QPoint windowPos() const;
+    qreal appMenuBarButtonCornerRadius()
+    {
+        return m_appMenuBarButtonCornerRadius;
+    }
+    //@}
+
     //
     //*@name maximization modes
     //@{
@@ -109,6 +148,8 @@ public:
     //@}
 
     void setWindowOutlineOverrideColor(const bool on, const QColor &color);
+
+    void paintAppOrWindowIcon(QPainter *painter, QRect iconRect, QColor windowTextColor, bool paintWindowMenu) const;
 
     QPainterPath *titleBarPath()
     {
@@ -232,6 +273,9 @@ public:
         return m_buttonUnisonHovered;
     }
 
+    bool appMenuBarBackgroundWindowColoredEnabled();
+    bool shouldPaintAppMenuBarBackgroundWindowColored();
+
 Q_SIGNALS:
     void reconfigured();
     void buttonUnisonHoveredChanged(bool); // for unison hovering
@@ -274,17 +318,17 @@ private Q_SLOTS:
 protected:
     void hoverMoveEvent(QHoverEvent *event) override; // override decoration hover events for Unison hovering
     void hoverLeaveEvent(QHoverEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
 
 private:
-    //* return the rect in which caption will be drawn
-    QPair<QRectF, Qt::Alignment> captionRect() const;
-
     void reconfigureMain(const bool noUpdateShadow = false);
     void updateDecorationColors(const QPalette &clientPalette, QByteArray uuid = "");
     void createButtons();
     void calculateWindowShape();
     void calculateTitleBarShape();
     void paintTitleBar(QPainter *painter, const QRectF &repaintRegion);
+    QFont fontWithAddedWeight() const;
     void updateShadow(const bool forceUpdateCache = false, bool noCache = false);
     std::shared_ptr<KDecoration3::DecorationShadow> createShadowObject(QColor shadowColor);
     void updateWindowOutline(bool override = false);
@@ -317,6 +361,9 @@ private:
 
     void setGlobalLookAndFeelOptions(QString lookAndFeelPackageName);
 
+    std::tuple<QColor, QColor> appMenuBarBackgroundColors();
+    void setAppMenuBarButtonCornerRadius();
+
     static KSharedConfig::Ptr s_kdeGlobalConfig;
     InternalSettingsPtr m_internalSettings;
     bool m_isRightToLeft = false;
@@ -324,12 +371,14 @@ private:
     KDecoration3::DecorationButtonGroup *m_rightButtons = nullptr;
     bool m_leftButtonsVisible = false;
     bool m_rightButtonsVisible = false;
+    class AppMenuButtonGroup *m_appMenuBarButtons = nullptr;
 
     TaskManagerType m_taskManagerType = TaskManagerType::IconsAndTextTaskManager;
     Side m_taskManagerSide = SideBottom;
 
     //* Object to return decoration palette colours
     std::unique_ptr<DecorationColors> m_decorationColors;
+    std::unique_ptr<DecorationColors> m_appMenuBarWindowColoredColors;
 
     //* active state change animation
     QVariantAnimation *m_animation;
@@ -344,9 +393,13 @@ private:
     qreal m_shadowOpacity = 0;
     //* overridden thin window outline change animation progress
     qreal m_overrideOutlineAnimationProgress = 0;
+    //* titlebar caption opacity
+    qreal m_captionOpacity = 1;
 
     //* frame corner radius, scaled for x11
-    qreal m_scaledCornerRadius = 3.0;
+    qreal m_scaledCornerRadius = 4.0;
+
+    qreal m_appMenuBarButtonCornerRadius = 4.0;
 
     //* border sizes, scaled for x11, snapped
     qreal m_scaledBorderLeftRight = 0;
@@ -508,13 +561,14 @@ bool Decoration::hideTitleBar() const
 {
     if (style() == KDecoration3::Style::Shadow)
         return true;
+    if (!m_internalSettings->hideTitleBarChecked()) {
+        return false;
+    }
 
     bool hide = false;
     auto c = window();
     switch (m_internalSettings->hideTitleBar()) {
     default:
-    case InternalSettings::EnumHideTitleBar::Never:
-        break;
     case InternalSettings::EnumHideTitleBar::Always:
         hide = !c->isShaded();
         break;

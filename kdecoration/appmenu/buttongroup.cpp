@@ -1,0 +1,1275 @@
+/*
+ * Copyright (C) 2025 Guido Iodice <guido[dot]iodice[at]gmail[dot]com>
+ * Copyright (C) 2020 Chris Holland <zrenfire@gmail.com>
+ * Copyright (C) 2016 Kai Uwe Broulik <kde@privat.broulik.de>
+ * Copyright (C) 2014 by Hugo Pereira Da Costa <hugo.pereira@free.fr>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+// own
+#include "appmenu/buttongroup.h"
+#include "appmenu/iconbutton.h"
+#include "appmenu/model.h"
+#include "appmenu/navigablemenu.h"
+#include "appmenu/searchbutton.h"
+#include "appmenu/textbutton.h"
+#include "breezedecoration.h"
+
+// KDecoration
+#include <KDecoration3/DecoratedWindow>
+#include <KDecoration3/ScaleHelpers>
+
+// KF
+#include <KLocalizedString>
+#include <KWindowSystem>
+
+// Qt
+#include <QAction>
+#include <QActionGroup>
+#include <QApplication>
+#include <QDebug>
+#include <QEvent>
+#include <QKeyEvent>
+#include <QMenu>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QScreen>
+#include <QSet>
+#include <QStringMatcher>
+#include <QTimer>
+#include <QVariantAnimation>
+#include <QWidgetAction>
+
+#include <utility>
+
+namespace Klassy
+{
+
+AppMenuButtonGroup::AppMenuButtonGroup(Decoration *decoration)
+    : KDecoration3::DecorationButtonGroup(decoration)
+    , m_decoration(decoration)
+    , m_appMenuModel(new AppMenuModel(this, decoration))
+    , m_animation(new QVariantAnimation(this))
+{
+    m_menuUpdateDebounceTimer = new QTimer(this);
+    m_menuUpdateDebounceTimer->setInterval(100);
+    m_menuUpdateDebounceTimer->setSingleShot(true);
+    connect(m_menuUpdateDebounceTimer, &QTimer::timeout, this, &AppMenuButtonGroup::onMenuUpdateThrottleTimeout);
+
+    m_delayedCacheTimer = new QTimer(this);
+    m_delayedCacheTimer->setInterval(200);
+    m_delayedCacheTimer->setSingleShot(true);
+    connect(m_delayedCacheTimer, &QTimer::timeout, this, &AppMenuButtonGroup::onDelayedCacheTimerTimeout);
+
+    m_resetTimer = new QTimer(this);
+    m_resetTimer->setInterval(250);
+    m_resetTimer->setSingleShot(true);
+    connect(m_resetTimer, &QTimer::timeout, this, [this]() {
+        resetButtons();
+        m_menuLoadedOnce = true;
+        Q_EMIT menuUpdated();
+    });
+
+    m_menuLoadFallbackTimer = new QTimer(this);
+    m_menuLoadFallbackTimer->setInterval(0);
+    m_menuLoadFallbackTimer->setSingleShot(true);
+    connect(m_menuLoadFallbackTimer, &QTimer::timeout, this, [this]() {
+        if (!m_menuLoadedOnce) {
+            m_menuLoadedOnce = true;
+            Q_EMIT menuUpdated();
+        }
+    });
+
+    // Assign style, showing, and opacity before we bind the onShowingChanged animation
+    // so that new windows do not animate.
+    auto internalSettings = m_decoration->internalSettings();
+    if (internalSettings->exceptionAppMenuBarBehaviourChecked()) {
+        setBehaviour(static_cast<AppMenuBehaviour>(internalSettings->exceptionAppMenuBarBehaviour()));
+    } else {
+        setBehaviour(static_cast<AppMenuBehaviour>(internalSettings->appMenuBarBehaviour()));
+    }
+    setFont();
+    updateShowing();
+
+    connect(this, &AppMenuButtonGroup::showingChanged, this, &AppMenuButtonGroup::onShowingChanged);
+    connect(this, &AppMenuButtonGroup::hoveredChanged, this, &AppMenuButtonGroup::updateShowing);
+    connect(this, &AppMenuButtonGroup::currentIndexChanged, this, &AppMenuButtonGroup::updateShowing);
+
+    m_animationEnabled = decoration->internalSettings()->animationsEnabled();
+    m_animation->setDuration(decoration->animationsDuration());
+    m_animation->setStartValue(0.0);
+    m_animation->setEndValue(1.0);
+    m_animation->setEasingCurve(QEasingCurve::OutCirc);
+    connect(m_animation, &QVariantAnimation::valueChanged, this, &AppMenuButtonGroup::onAnimationValueChanged);
+
+    auto decoratedClient = decoration->window();
+    connect(decoratedClient, &KDecoration3::DecoratedWindow::hasApplicationMenuChanged, this, &AppMenuButtonGroup::onHasApplicationMenuChanged);
+    connect(decoratedClient, &KDecoration3::DecoratedWindow::applicationMenuChanged, this, &AppMenuButtonGroup::onApplicationMenuChanged);
+
+    connect(m_appMenuModel, &AppMenuModel::modelReset, this, &AppMenuButtonGroup::updateAppMenuModel);
+    connect(m_appMenuModel, &AppMenuModel::menuReadyForSearch, this, &AppMenuButtonGroup::onMenuReadyForSearch);
+    connect(m_appMenuModel, &AppMenuModel::subMenuReady, this, &AppMenuButtonGroup::onSubMenuReady);
+
+    if (decoratedClient->hasApplicationMenu()) {
+        onHasApplicationMenuChanged(true);
+    } else {
+        // Wait the next loop if not modal.
+        if (decoratedClient->isModal()) {
+            m_menuLoadedOnce = true;
+        } else {
+            m_menuLoadFallbackTimer->start();
+        }
+    }
+}
+
+AppMenuButtonGroup::~AppMenuButtonGroup()
+{
+    // explicit destruction even
+    // if it already is Qt::WA_DeleteOnClose,
+    // deal whit the corner-case in which the window
+    // is closed while the m_overflowMenu is open
+    if (m_overflowMenu) {
+        m_overflowMenu->deleteLater();
+    }
+}
+
+void AppMenuButtonGroup::reconfigure()
+{
+    auto internalSettings = m_decoration->internalSettings();
+    if (internalSettings->exceptionAppMenuBarBehaviourChecked()) {
+        setBehaviour(static_cast<AppMenuBehaviour>(internalSettings->exceptionAppMenuBarBehaviour()));
+    } else {
+        setBehaviour(static_cast<AppMenuBehaviour>(internalSettings->appMenuBarBehaviour()));
+    }
+    setPosition(static_cast<AppMenuPosition>(internalSettings->appMenuBarPosition()));
+
+    if (!internalSettings->appMenuBarSearchEnabled() && m_searchButton) {
+        removeButton(m_searchButton);
+        m_searchButton->deleteLater();
+        m_searchButton = nullptr;
+        m_searchIndex = -1;
+    }
+
+    m_animationEnabled = internalSettings->animationsEnabled();
+    m_animation->setDuration(m_decoration->animationsDuration());
+    setFont();
+    for (KDecoration3::DecorationButton *button : this->buttons()) {
+        if (auto appMenuTextButton = qobject_cast<AppMenuTextButton *>(button)) {
+            appMenuTextButton->setFont(m_font);
+        }
+        if (auto appMenuButton = qobject_cast<AppMenuButton *>(button)) {
+            appMenuButton->reconfigure();
+        }
+    }
+
+    updateShowing();
+    if (m_behaviour == AppMenuBehaviour::ReplaceTitleOnHover || m_behaviour == AppMenuBehaviour::RevealOnHover)
+        setOpacity(m_animationEnabled && m_animation->duration() > 0 ? m_animation->currentValue().toReal() : (m_hovered || m_showing ? 1 : 0));
+    if (m_behaviour == AppMenuBehaviour::AlwaysExpandOnHover)
+        setOpacity(1);
+    if (m_behaviour != AppMenuBehaviour::ReplaceTitleOnHover)
+        m_decoration->setCaptionOpacity(1);
+}
+
+bool AppMenuButtonGroup::alwaysShow() const
+{
+    // NOTE: AlwaysExpandOnHover is excluded because it's not 'fully' shown until hovered.
+    return m_behaviour != AppMenuBehaviour::AlwaysExpandOnHover && m_behaviour != AppMenuBehaviour::ReplaceTitleOnHover
+        && m_behaviour != AppMenuBehaviour::RevealOnHover;
+}
+
+void AppMenuButtonGroup::setFont()
+{
+    m_font = m_decoration->internalSettings()->appMenuBarButtonUseSystemMenuFont() ? QApplication::font("QMenu") : m_decoration->settings()->font();
+}
+
+KDecoration3::DecorationButton *AppMenuButtonGroup::buttonAt(QPointF pos) const
+{
+    for (auto &tb : std::as_const(m_textButtons)) {
+        if (tb && tb->isVisible() && tb->geometry().contains(pos)) {
+            return tb;
+        }
+    }
+    if (m_overflowButton && m_overflowButton->isVisible() && m_overflowButton->geometry().contains(pos)) {
+        return m_overflowButton;
+    }
+    if (m_searchButton && m_searchButton->isVisible() && m_searchButton->geometry().contains(pos)) {
+        return m_searchButton;
+    }
+    return nullptr;
+}
+
+void AppMenuButtonGroup::startDragMove(const QPointF &pos)
+{
+    m_pressedPoint = pos;
+    m_preStartDragging = true;
+}
+
+void AppMenuButtonGroup::resetDragMove()
+{
+    m_preStartDragging = false;
+}
+
+bool AppMenuButtonGroup::dragMoveTick(const QPointF &pos)
+{
+    if (!m_preStartDragging) {
+        return false;
+    }
+
+    const QPointF diff = pos - m_pressedPoint;
+    if (diff.manhattanLength() >= QApplication::startDragDistance()) {
+        m_preStartDragging = false;
+        unpressAllButtons();
+        return true;
+    }
+    return false;
+}
+
+void AppMenuButtonGroup::resetButtons()
+{
+    if (buttons().isEmpty()) {
+        return;
+    }
+    setCurrentIndex(-1);
+    m_currentMenu = nullptr;
+    m_textButtons.clear();
+    m_overflowButton = nullptr;
+    m_searchButton = nullptr;
+    m_overflowIndex = -1;
+    m_searchIndex = -1;
+
+    if (m_overflowMenu) {
+        m_overflowMenu->deleteLater();
+    }
+
+    // Create a copy of the button pointers before removing them from the group.
+    const auto allButtons = buttons();
+
+    // This removes all buttons with the "Custom" type from the group's list,
+    // but does not delete the button widgets themselves.
+    removeButton(KDecoration3::DecorationButtonType::Custom);
+
+    // Now, immediately delete the button widgets we took ownership of.
+    // This is necessary to prevent layout race conditions when recreating buttons
+    // in the same event loop cycle.
+    qDeleteAll(allButtons);
+
+    Q_EMIT menuUpdated();
+}
+
+void AppMenuButtonGroup::onMenuReadyForSearch()
+{
+    if (m_searchButton && m_searchButton->isUiVisible())
+        m_searchButton->filterToLastSearch();
+}
+
+void AppMenuButtonGroup::onHasApplicationMenuChanged(bool hasMenu)
+{
+    if (hasMenu) {
+        m_resetTimer->stop();
+        m_menuLoadedOnce = false;
+        m_menuLoadFallbackTimer->start(500);
+        Q_EMIT menuUpdated();
+
+        if (m_isMenuUpdateThrottled) {
+            m_pendingMenuUpdate = true;
+            return;
+        }
+        performDebouncedMenuUpdate();
+        m_isMenuUpdateThrottled = true;
+        m_menuUpdateDebounceTimer->start();
+    } else {
+        m_menuUpdateDebounceTimer->stop();
+        m_isMenuUpdateThrottled = false;
+        m_pendingMenuUpdate = false;
+        m_menuLoadFallbackTimer->stop();
+
+        // Defer reset to avoid flicker during window closure
+        m_resetTimer->start();
+        m_menuLoadedOnce = false;
+        Q_EMIT menuUpdated();
+    }
+}
+
+void AppMenuButtonGroup::onApplicationMenuChanged()
+{
+    if (m_isMenuUpdateThrottled) {
+        m_pendingMenuUpdate = true;
+        return;
+    }
+    performDebouncedMenuUpdate();
+    m_isMenuUpdateThrottled = true;
+    m_menuUpdateDebounceTimer->start();
+}
+
+void AppMenuButtonGroup::onMenuUpdateThrottleTimeout()
+{
+    m_isMenuUpdateThrottled = false;
+    if (m_pendingMenuUpdate) {
+        m_pendingMenuUpdate = false;
+        onApplicationMenuChanged();
+    }
+}
+
+void AppMenuButtonGroup::onDelayedCacheTimerTimeout()
+{
+    if (!m_appMenuModel) {
+        return;
+    }
+
+    if (m_buttonIndexOfMenuToCache == m_searchIndex) {
+        m_appMenuModel->startDeepCaching();
+    }
+}
+
+void AppMenuButtonGroup::performDebouncedMenuUpdate()
+{
+    auto *deco = qobject_cast<Decoration *>(decoration());
+    if (!deco) {
+        return;
+    }
+    auto decoratedClient = deco->window();
+    if (m_appMenuModel && decoratedClient->hasApplicationMenu()) {
+        const QString serviceName = decoratedClient->applicationMenuServiceName();
+        const QString menuObjectPath = decoratedClient->applicationMenuObjectPath();
+        if (!serviceName.isEmpty() && !menuObjectPath.isEmpty()) {
+            m_appMenuModel->updateApplicationMenu(serviceName, menuObjectPath);
+        } else {
+            m_resetTimer->start();
+        }
+    }
+}
+
+void AppMenuButtonGroup::updateAppMenuModel()
+{
+    auto *deco = qobject_cast<Decoration *>(decoration());
+    if (!deco) {
+        return;
+    }
+    auto decoratedClient = deco->window();
+
+    // Don't display AppMenu in modal windows.
+    if (decoratedClient->isModal()) {
+        m_resetTimer->start();
+        return;
+    }
+
+    if (!decoratedClient->hasApplicationMenu()) {
+        // Defer reset to avoid flicker during window closure
+        m_resetTimer->start();
+        return;
+    }
+
+    if (m_appMenuModel) {
+        QMenu *menu = m_appMenuModel->menu();
+        if (!menu) {
+            // Defer reset to avoid flicker during window closure
+            m_resetTimer->start();
+            return;
+        }
+
+        const auto actions = menu->actions();
+        const int menuActionCount = actions.count();
+
+        // Preserve current menu state if possible
+        const bool wasSearchOpen = (m_currentIndex == m_searchIndex && m_searchIndex != -1);
+        const bool wasOverflowOpen = (m_currentIndex == m_overflowIndex && m_overflowIndex != -1);
+        QPointer<QMenu> previousMenu = m_currentMenu;
+
+        // Try in-place update if possible to reduce flicker and object churn
+        const bool searchEnabled = deco->internalSettings()->appMenuBarSearchEnabled();
+        const bool searchStateMatches = (m_searchButton.isNull() == !searchEnabled);
+
+        if (m_textButtons.count() == menuActionCount && !m_textButtons.isEmpty() && searchStateMatches) {
+            if (m_searchButton)
+                m_searchButton->clearCache();
+            int actionIdx = 0;
+            for (auto &textButton : std::as_const(m_textButtons)) {
+                if (!textButton) {
+                    actionIdx++;
+                    continue;
+                }
+                QAction *itemAction = actions.at(actionIdx++);
+                textButton->setAction(itemAction);
+                textButton->setText(itemAction->text().trimmed());
+                // Skip items with empty labels (The first item in a Gtk app)
+                if (itemAction->text().isEmpty()) {
+                    textButton->setEnabled(false);
+                    textButton->setVisible(false);
+                } else {
+                    textButton->setEnabled(itemAction->isEnabled());
+                    textButton->setVisible(true);
+                }
+            }
+
+            if (wasSearchOpen) {
+                m_searchButton->filterToLastSearch();
+            }
+        } else {
+            resetButtons(); // Immediate reset is intended here for structural changes
+
+            // Populate
+            for (int i = 0; i < menuActionCount; ++i) {
+                QAction *itemAction = actions.at(i);
+                const QString itemLabel = itemAction->text().trimmed();
+
+                AppMenuTextButton *b = new AppMenuTextButton(deco, i, this);
+                b->setFont(m_font);
+                b->setText(itemLabel);
+                b->setAction(itemAction);
+                b->setOpacity(m_opacity);
+
+                // Skip items with empty labels (The first item in a Gtk app)
+                if (itemLabel.isEmpty()) {
+                    b->setEnabled(false);
+                    b->setVisible(false);
+                } else {
+                    b->setEnabled(itemAction->isEnabled());
+                }
+
+                m_textButtons.append(b);
+                addButton(QPointer<KDecoration3::DecorationButton>(b));
+            }
+
+            if (menuActionCount > 0) {
+                m_overflowIndex = menuActionCount;
+                m_overflowButton = new AppMenuIconButton(DecorationButtonType::CustomAppMenuBarOverflow, deco, m_overflowIndex, this);
+                addButton(QPointer<KDecoration3::DecorationButton>(m_overflowButton));
+
+                if (searchEnabled) {
+                    m_searchIndex = menuActionCount + 1;
+                    m_searchButton = new AppMenuSearchButton(deco, m_searchIndex, this);
+                    addButton(QPointer<KDecoration3::DecorationButton>(m_searchButton));
+                }
+            }
+        }
+
+        // Restore state
+        int indexToRestore = -1;
+        if (wasSearchOpen && m_searchIndex != -1) {
+            indexToRestore = m_searchIndex;
+        } else if (wasOverflowOpen && m_overflowIndex != -1) {
+            indexToRestore = m_overflowIndex;
+        }
+
+        if (indexToRestore != -1) {
+            setCurrentIndex(indexToRestore);
+            m_currentMenu = previousMenu;
+
+            if (AppMenuButton *b = getAppMenuButton(m_currentIndex)) {
+                b->setChecked(true);
+            }
+        }
+
+        if (menuActionCount > 0) {
+            m_resetTimer->stop();
+            m_menuLoadFallbackTimer->stop();
+            m_menuLoadedOnce = true;
+        }
+
+        Q_EMIT menuUpdated();
+    }
+}
+
+// NOTE: fuzzyLessThanOrEqual was needed in updateOverflow to prevent flickering due to small rounding errors
+bool fuzzyLessThanOrEqual(qreal a, qreal b)
+{
+    return a <= b || qFuzzyCompare(a, b);
+}
+
+void AppMenuButtonGroup::updateOverflow(QRectF availableRect)
+{
+    const qreal availableExpandedWidth = availableRect.width();
+    const qreal overflowBtnWidth = m_overflowButton ? m_overflowButton->geometry().width() : 0;
+    const qreal searchBtnWidth = m_searchButton ? m_searchButton->geometry().width() + spacing() : 0;
+    const qreal ellipsisWidth = AppMenuTextButton::ellipsisWidth(m_font, m_decoration->window()->scale());
+    if (expandsOnHover()) {
+        const qreal captionMargins = m_decoration->scaledTitleSidePadding(false) * 2;
+
+        auto titleParams = m_decoration->getTitleParams();
+        const qreal maxCaptionWidth = titleParams->maxTitleWidthCeil + captionMargins;
+        const qreal captionWidth = qMin(maxCaptionWidth, availableRect.width() - overflowBtnWidth - searchBtnWidth - captionMargins);
+        const qreal captionOffset = captionWidth + captionMargins;
+        if (m_position == AppMenuPosition::Left) {
+            availableRect.adjust(0, 0, -captionOffset, 0);
+        } else {
+            availableRect.adjust(captionOffset, 0, 0, 0);
+        }
+    }
+    const qreal availableUnexpandedWidth = availableRect.width();
+
+    qreal minVisibleWidth = 0;
+    qreal maxVisibleWidth = searchBtnWidth;
+    m_hasEllipsis = false;
+    if (m_behaviour == AppMenuBehaviour::SearchOnly) {
+        for (auto &tb : std::as_const(m_textButtons)) {
+            if (tb)
+                tb->setVisible(false);
+        }
+        if (m_overflowButton) {
+            m_overflowButton->setVisible(false);
+        }
+    } else {
+        // First pass: reset ellipsis flags and get index of last enabled text button
+        int lastEnabledTextButtonIndex = -1;
+        int numTextButtons = m_textButtons.size();
+        for (int i = 0; i < numTextButtons; ++i) {
+            m_textButtons[i]->setHasEllipsis(false, false);
+            if (m_textButtons[i]->isEnabled()) {
+                lastEnabledTextButtonIndex = i;
+            }
+        }
+
+        // Second pass: check if all enabled text buttons fit without overflow button.
+        // We perform this pass without side effects to avoid layout thrashing in Qt.
+        qreal totalTextWidth = 0;
+        bool allFit = true;
+
+        for (int i = 0; i <= lastEnabledTextButtonIndex; ++i) {
+            if (m_textButtons[i]->isEnabled()) {
+                totalTextWidth += m_textButtons[i]->geometry().width();
+                if (i != lastEnabledTextButtonIndex) {
+                    totalTextWidth += spacing();
+                }
+                if (searchBtnWidth + totalTextWidth > availableUnexpandedWidth) {
+                    allFit = false;
+                }
+            }
+        }
+
+        // NOTE: If no buttons are enabled, then totalTextWidth is 0 & allFit is true
+        if (allFit) {
+            minVisibleWidth += searchBtnWidth + totalTextWidth;
+            maxVisibleWidth += totalTextWidth;
+            // Second pass: apply visibility
+            for (auto &tb : std::as_const(m_textButtons)) {
+                if (tb) {
+                    tb->setVisible(tb->isEnabled());
+                    tb->setExpansionOpacity(1);
+                }
+            }
+            m_overflowButton->setVisible(false);
+            m_overflowButton->setExpansionOpacity(1);
+            if (m_searchButton) {
+                m_searchButton->setVisible(true);
+                m_searchButton->setExpansionOpacity(1);
+            }
+        } else if (expandsOnHover()) {
+            qreal remainingMaxWidth = availableExpandedWidth - searchBtnWidth;
+            // Third pass: Mark which ones are in the fully expanded menu by setting visibility
+            bool fitsInExpanded = true;
+
+            for (auto &rawButton : buttons()) {
+                auto button = qobject_cast<AppMenuButton *>(rawButton);
+                if (!button) {
+                    continue;
+                }
+
+                if (!button->isEnabled()) {
+                    button->setVisible(false);
+                    continue;
+                }
+                const qreal w = button->geometry().width();
+                const bool isLastEnabledTextButton = button == m_textButtons[lastEnabledTextButtonIndex];
+                if (m_overflowButton && button == m_overflowButton) {
+                    if (!fitsInExpanded) {
+                        m_overflowButton->setVisible(true);
+                        maxVisibleWidth += overflowBtnWidth;
+                    } else {
+                        m_overflowButton->setVisible(false);
+                    }
+                } else if (m_searchButton && button == m_searchButton) {
+                    m_searchButton->setVisible(true);
+                } else if (fitsInExpanded && fuzzyLessThanOrEqual(w + (isLastEnabledTextButton ? 0 : overflowBtnWidth), remainingMaxWidth)) {
+                    remainingMaxWidth -= w;
+                    maxVisibleWidth += w;
+                    if (!isLastEnabledTextButton) {
+                        remainingMaxWidth -= spacing();
+                        maxVisibleWidth += spacing();
+                    }
+                    button->setVisible(true);
+                } else {
+                    button->setVisible(false);
+                    fitsInExpanded = false;
+                }
+            }
+            // Fourth pass: apply opacity and calculate min width
+            const bool isUnexpanded = qFuzzyCompare(m_expansionFraction, 0);
+            qreal remainingMinWidth =
+                availableUnexpandedWidth - ellipsisWidth + spacing(); // add spacing to account for fact that last button doesn't need spacing
+            qreal remainingExpandedWidth = remainingMinWidth
+                + (availableExpandedWidth - availableUnexpandedWidth + searchBtnWidth + overflowBtnWidth + spacing() + ellipsisWidth)
+                    * m_expansionFraction; // add spacing to account for fact that last button doesn't need spacing
+            bool fitsInMin = true;
+            bool fitsInCurrentExpansion = true;
+            auto buttons = this->buttons();
+            AppMenuButton *lastUnexpandedButton = nullptr;
+            bool reverseLoop = m_position == AppMenuPosition::Right;
+            auto forButton = [&](KDecoration3::DecorationButton *const &rawButton) {
+                auto button = qobject_cast<AppMenuButton *>(rawButton);
+                if (!(button && button->isVisible())) {
+                    return;
+                }
+
+                qreal w = button->geometry().width() + spacing();
+
+                qreal opacity = 0;
+                if (fitsInMin && fuzzyLessThanOrEqual(w, remainingMinWidth)) {
+                    opacity = 1;
+                    remainingMinWidth -= w;
+                } else {
+                    fitsInMin = false;
+                }
+
+                if (fitsInCurrentExpansion && fuzzyLessThanOrEqual(w, remainingExpandedWidth)) {
+                    opacity = qMax(opacity, m_expansionFraction);
+                    remainingExpandedWidth -= w;
+                    minVisibleWidth += w;
+                } else if (fitsInCurrentExpansion) {
+                    if (!isUnexpanded) {
+                        opacity = qMax(opacity, remainingExpandedWidth / w * m_expansionFraction);
+                    }
+                    fitsInCurrentExpansion = false;
+                } else {
+                    fitsInCurrentExpansion = false;
+                }
+
+                if (isUnexpanded && fitsInMin) {
+                    lastUnexpandedButton = button;
+                }
+                button->setExpansionOpacity(opacity);
+            };
+
+            if (reverseLoop) {
+                std::for_each(buttons.crbegin(), buttons.crend(), forButton);
+            } else {
+                std::for_each(buttons.cbegin(), buttons.cend(), forButton);
+            }
+
+            // add ellipsis to last opaque unexpanded button
+            if (auto lastUnexpandedTextButton = qobject_cast<AppMenuTextButton *>(lastUnexpandedButton)) {
+                m_hasEllipsis = true;
+                minVisibleWidth += ellipsisWidth - spacing(); // last unexpanded button doesn't need spacing so subtract
+                if (reverseLoop) {
+                    lastUnexpandedTextButton->setHasEllipsis(true, true);
+
+                } else {
+                    lastUnexpandedTextButton->setHasEllipsis(true, false);
+                }
+            }
+        } else {
+            qreal remainingWidth = availableExpandedWidth - searchBtnWidth - overflowBtnWidth;
+
+            // Third pass: apply visibility and calculate final width
+            bool fits = true;
+            for (auto &tb : std::as_const(m_textButtons)) {
+                if (!tb) {
+                    continue;
+                }
+                if (fits && tb->isEnabled()) {
+                    qreal spacing = (tb == m_textButtons[lastEnabledTextButtonIndex]) ? 0 : this->spacing();
+                    const qreal w = tb->geometry().width() + spacing;
+                    if (w <= remainingWidth) {
+                        tb->setVisible(true);
+                        tb->setExpansionOpacity(1);
+                        minVisibleWidth += w;
+                        remainingWidth -= w;
+                        continue;
+                    }
+                    fits = false;
+                }
+                tb->setVisible(false);
+            }
+            if (m_overflowButton) {
+                m_overflowButton->setVisible(true);
+                m_overflowButton->setExpansionOpacity(1);
+                minVisibleWidth += overflowBtnWidth;
+            }
+            if (m_searchButton) {
+                m_searchButton->setExpansionOpacity(1);
+                minVisibleWidth += searchBtnWidth;
+            }
+            maxVisibleWidth = minVisibleWidth;
+        }
+    }
+    if (m_behaviour == AppMenuBehaviour::RevealOnHover)
+        minVisibleWidth = 0;
+
+    setOverflowing(m_overflowButton && m_overflowButton->isVisible());
+
+    updateAdjacencyFlags();
+
+    if (!(qFuzzyCompare(m_minimumWidth, minVisibleWidth) && qFuzzyCompare(m_maximumWidth, maxVisibleWidth))) {
+        m_minimumWidth = minVisibleWidth;
+        m_maximumWidth = maxVisibleWidth;
+        Q_EMIT menuUpdated();
+    }
+}
+
+void AppMenuButtonGroup::updateAdjacencyFlags()
+{
+    AppMenuButton *firstVisible = nullptr;
+    AppMenuButton *lastVisible = nullptr;
+    for (auto tb : buttons()) {
+        if (auto button = qobject_cast<AppMenuButton *>(tb)) {
+            if (!firstVisible && button->isVisible()) {
+                firstVisible = button;
+            }
+            if (button->isVisible())
+                lastVisible = button;
+            button->setLeftmostVisible(firstVisible == button);
+            button->setRightmostVisible(false);
+        }
+    }
+    if (lastVisible)
+        lastVisible->setRightmostVisible(true);
+}
+
+void AppMenuButtonGroup::updateGeometry()
+{
+    if (buttons().isEmpty())
+        return;
+    const auto internalSettings = m_decoration->internalSettings();
+    const qreal scale = m_decoration->window()->scale();
+    const qreal x11Scale = m_decoration->x11Scale();
+
+    bool isLeftButtons = m_decoration->leftButtonsVisible();
+    bool isRightButtons = m_decoration->rightButtonsVisible();
+
+    QRectF decoRect = m_decoration->rect();
+    const qreal leftOffset =
+        isLeftButtons ? (m_decoration->leftButtons()->geometry().right() + m_decoration->scaledButtonSpacingLeft()) : m_decoration->borderLeft();
+    const qreal rightOffset = isRightButtons ? (decoRect.width() - m_decoration->rightButtons()->geometry().left() + m_decoration->scaledButtonSpacingRight())
+                                             : m_decoration->borderRight();
+
+    m_titleHoverArea = QRectF(
+        QPointF(isLeftButtons ? m_decoration->leftButtons()->geometry().right() : m_decoration->borderLeft(), 0),
+        QPointF(isRightButtons ? m_decoration->rightButtons()->geometry().left() : decoRect.right() - m_decoration->borderRight(), m_decoration->borderTop()));
+
+    const qreal scaledTitleBarSeparatorHeight = m_decoration->scaledTitleBarSeparatorHeight(false);
+    qreal scaledTitleBarTopMargin = m_decoration->scaledTitleBarTopMargin(false);
+
+    const qreal captionHeight = m_decoration->captionHeight();
+
+    const int buttonShape = internalSettings->appMenuBarButtonShape();
+    const bool isFullHeight = AppMenuButton::isShapeFullHeight(buttonShape);
+    const qreal baseSize = qMax(m_decoration->scaledSmallButtonPaddedSize(), captionHeight);
+    const qreal verticalIconOffsetNormal = scaledTitleBarTopMargin + qreal(captionHeight - baseSize) / 2;
+    const qreal topOffset = isFullHeight ? 0 : verticalIconOffsetNormal;
+    const qreal contentOffset = isFullHeight ? verticalIconOffsetNormal : 0;
+
+    qreal baseButtonHeight;
+    if (isFullHeight) {
+        baseButtonHeight = qMax(m_decoration->borderTop() - scaledTitleBarSeparatorHeight, 0.0);
+    } else {
+        baseButtonHeight = m_decoration->scaledSmallButtonBackgroundSize();
+    }
+    // Handle the case where the button size is smaller than the height we need for text buttons
+    const qreal realButtonHeight = qMax(captionHeight, baseButtonHeight) + topOffset * 2;
+    const qreal iconTranslation = (m_decoration->scaledSmallButtonPaddedSize() - m_decoration->scaledIconSize()) / 2;
+    const QPointF iconOffset = {iconTranslation, iconTranslation + (realButtonHeight - contentOffset - m_decoration->scaledSmallButtonPaddedSize()) / 2};
+    QRectF availableRect(leftOffset, 0, decoRect.width() - leftOffset - rightOffset, captionHeight + contentOffset + topOffset * 2);
+
+    for (auto *button : buttons()) {
+        AppMenuButton *appMenuButton;
+        if (auto *textButton = qobject_cast<AppMenuTextButton *>(button)) {
+            appMenuButton = textButton;
+            textButton->setHorizontalMargin(KDecoration3::snapToPixelGrid(internalSettings->appMenuBarButtonHorizontalMargin() * x11Scale, scale));
+        } else if (auto *iconButton = qobject_cast<AppMenuIconButton *>(button)) {
+            appMenuButton = iconButton;
+            iconButton->setIconOffset(iconOffset);
+        } else {
+            continue;
+        }
+
+        appMenuButton->setVerticalBackgroundOffset(topOffset);
+        appMenuButton->setVerticalContentOffset(contentOffset);
+        appMenuButton->setButtonHeight(realButtonHeight);
+    }
+
+    setSpacing(KDecoration3::snapToPixelGrid(internalSettings->appMenuBarButtonHorizontalSpacing() * x11Scale, scale));
+    updateOverflow(availableRect);
+
+    const bool isReplaceStyle = m_behaviour == AppMenuBehaviour::ReplaceTitleOnHover;
+    if (isReplaceStyle && m_position == AppMenuPosition::Center) {
+        const qreal x = (availableRect.width() - visibleWidth()) / 2 + leftOffset;
+        setPos(QPointF(x, availableRect.y()));
+    } else if (isReplaceStyle && m_position == AppMenuPosition::CenterFullWidth) {
+        const qreal x = (m_decoration->size().width() - visibleWidth()) / 2;
+        setPos(QPointF(x, availableRect.y()));
+    } else if (m_position == AppMenuPosition::Right) {
+        qreal ellipsisWidth = m_hasEllipsis ? AppMenuTextButton::ellipsisWidth(m_font, scale) : 0;
+        setPos(availableRect.topRight() - QPointF(m_maximumWidth, 0) - QPointF(ellipsisWidth, 0));
+    } else {
+        setPos(availableRect.topLeft());
+    }
+
+    if (m_animationEnabled && risesOnHover()) {
+        QPointF originalPos = pos();
+        qreal delta = m_decoration->borderTop() * (1 - m_animation->currentValue().toReal());
+        setPos(QPointF(originalPos.x(), originalPos.y() + delta));
+    }
+}
+
+QPointF AppMenuButtonGroup::visibleTopLeft() const
+{
+    if (m_position == AppMenuPosition::Right) {
+        qreal ellipsisWidth = m_hasEllipsis ? AppMenuTextButton::ellipsisWidth(m_font, m_decoration->window()->scale()) : 0;
+        return this->geometry().topLeft() + QPointF((m_maximumWidth - m_minimumWidth + ellipsisWidth) * (1 - m_expansionFraction), 0);
+    } else {
+        return this->geometry().topLeft();
+    }
+}
+
+qreal AppMenuButtonGroup::visibleWidth() const
+{
+    qreal minimumWidth = m_minimumWidth;
+    return minimumWidth + (m_maximumWidth - minimumWidth) * m_expansionFraction;
+}
+
+bool AppMenuButtonGroup::menuLoadedOnce() const
+{
+    return m_menuLoadedOnce;
+}
+
+bool AppMenuButtonGroup::isWaitingForMenu() const
+{
+    return (m_menuLoadFallbackTimer && m_menuLoadFallbackTimer->isActive()) || (m_resetTimer && m_resetTimer->isActive());
+}
+
+void AppMenuButtonGroup::popupMenu(QMenu *menu, int buttonIndex)
+{
+    // Stop any caching that may be in progress from a previously opened menu.
+    m_appMenuModel->stopCaching();
+
+    auto *deco = qobject_cast<Decoration *>(decoration());
+    AppMenuButton *button = getAppMenuButton(buttonIndex);
+
+    if (!menu || !deco || !button) {
+        return;
+    }
+
+    QPointer<QMenu> oldMenu = m_currentMenu;
+    AppMenuButton *oldButton = getAppMenuButton(m_currentIndex);
+
+    // 1. Set the new internal state. This must happen before popup for positioning.
+    setCurrentIndex(buttonIndex);
+    button->setChecked(true);
+    if (m_immediateTransition)
+        button->transitionFully();
+    m_currentMenu = menu;
+
+    // 2. Calculate position and show the new menu. This must happen before hiding the old one to prevent flicker.
+    if (auto navMenu = qobject_cast<NavigableMenu *>(menu)) {
+        connect(navMenu, &NavigableMenu::hitLeft, this, &AppMenuButtonGroup::onHitLeft, Qt::UniqueConnection);
+        connect(navMenu, &NavigableMenu::hitRight, this, &AppMenuButtonGroup::onHitRight, Qt::UniqueConnection);
+    }
+    if (m_searchButton && menu != m_searchButton->menu()) {
+        menu->installEventFilter(this);
+    }
+
+    KDecoration3::Positioner positioner;
+    // Shrink the geometry by half of normal to potentially allow the menu to align with the button (if it can position on the left edge)
+    const qreal halfShrinkOffset = PenWidth::Symbol * 1.5 * (KWindowSystem::isPlatformX11() ? m_decoration->systemScaleFactorX11() : 1) / 2;
+    positioner.setAnchorRect(button->geometry().adjusted(halfShrinkOffset,
+                                                         button->verticalBackgroundOffset() + halfShrinkOffset,
+                                                         -halfShrinkOffset,
+                                                         -button->verticalBackgroundOffset() - halfShrinkOffset));
+    deco->popup(positioner, menu);
+
+    if (buttonIndex == m_searchIndex) {
+        m_searchButton->setLineFocus();
+    }
+
+    // 3. Connect the hide signal for the new menu.
+    connect(menu, &QMenu::aboutToHide, this, &AppMenuButtonGroup::onMenuAboutToHide, Qt::UniqueConnection);
+
+    // 4. Clean up the old menu and button state.
+    if (oldMenu && oldMenu != menu) {
+        if (auto oldNavMenu = qobject_cast<NavigableMenu *>(oldMenu)) {
+            disconnect(oldNavMenu, &NavigableMenu::hitLeft, this, &AppMenuButtonGroup::onHitLeft);
+            disconnect(oldNavMenu, &NavigableMenu::hitRight, this, &AppMenuButtonGroup::onHitRight);
+        }
+        disconnect(oldMenu, &QMenu::aboutToHide, this, &AppMenuButtonGroup::onMenuAboutToHide);
+        oldMenu->hide();
+    }
+    if (oldButton && oldButton != button) {
+        oldButton->setChecked(false);
+    }
+
+    // When the search menu is shown, trigger deep caching after a short delay
+    // to make subsequent searches faster.
+    m_delayedCacheTimer->stop();
+    m_buttonIndexOfMenuToCache = buttonIndex;
+    m_delayedCacheTimer->start();
+}
+
+void AppMenuButtonGroup::handleMenuButtonTrigger(int buttonIndex)
+{
+    if (!m_appMenuModel || !m_appMenuModel->menu() || buttonIndex >= m_appMenuModel->menu()->actions().count()) {
+        return; // Index out of bounds
+    }
+
+    QAction *itemAction = m_appMenuModel->menu()->actions().at(buttonIndex);
+    if (itemAction && itemAction->menu()) {
+        QMenu *actionMenu = itemAction->menu();
+        // If the menu is empty, we need to load it just-in-time.
+        if (actionMenu->actions().isEmpty()) {
+            // If we are already waiting for a different menu, cancel the old one.
+            if (m_buttonIndexWaitingForPopup != -1 && m_buttonIndexWaitingForPopup != buttonIndex) {
+                m_buttonIndexWaitingForPopup = -1;
+            }
+
+            // If we are already waiting for this menu, do nothing.
+            if (m_buttonIndexWaitingForPopup == buttonIndex) {
+                return;
+            }
+
+            m_buttonIndexWaitingForPopup = buttonIndex;
+            m_appMenuModel->loadSubMenu(actionMenu);
+            return; // Abort the trigger; the onSubMenuReady slot will re-trigger later.
+        } else {
+            // Menu is already loaded, show it.
+            popupMenu(actionMenu, buttonIndex);
+        }
+    }
+}
+
+void AppMenuButtonGroup::handleSearchTrigger()
+{
+    if (m_currentIndex == m_searchIndex) {
+        m_searchButton->menu()->hide();
+        return;
+    }
+    popupMenu(m_searchButton->menu(), m_searchIndex);
+}
+
+void AppMenuButtonGroup::handleOverflowTrigger()
+{
+    // A latent bug would cause this to show a menu with all items if triggered
+    // while the overflow button is invisible. This guard prevents that.
+    if (!overflowing()) {
+        return;
+    }
+
+    if (m_overflowMenu) {
+        m_overflowMenu->deleteLater();
+    }
+
+    auto *actionMenu = new NavigableMenu(nullptr, m_decoration);
+    actionMenu->setAttribute(Qt::WA_DeleteOnClose);
+    m_overflowMenu = actionMenu;
+
+    if (m_appMenuModel && m_appMenuModel->menu()) {
+        int overflowStartsAt = 0;
+        // Find the first non-visible button to determine where the overflow starts
+        for (auto &textButton : std::as_const(m_textButtons)) {
+            if (textButton && textButton->isEnabled() && !textButton->isVisible()) {
+                overflowStartsAt = textButton->buttonIndex();
+                break;
+            }
+        }
+
+        const auto actions = m_appMenuModel->menu()->actions();
+        for (int i = overflowStartsAt; i < actions.count(); ++i) {
+            actionMenu->addAction(actions.at(i));
+        }
+    }
+
+    popupMenu(actionMenu, m_overflowIndex);
+}
+
+void AppMenuButtonGroup::trigger(int buttonIndex, bool immediateTransition)
+{
+    // The button is checked in popupMenu, but we need to check it here
+    // for the case where the menu is not yet loaded.
+    AppMenuButton *button = getAppMenuButton(buttonIndex);
+
+    if (!button) {
+        return;
+    }
+
+    m_immediateTransition = immediateTransition;
+    if (buttonIndex == m_searchIndex) {
+        handleSearchTrigger();
+    } else if (buttonIndex == m_overflowIndex) {
+        handleOverflowTrigger();
+    } else {
+        handleMenuButtonTrigger(buttonIndex);
+    }
+}
+
+// FIXME TODO doesn't work on submenu
+bool AppMenuButtonGroup::eventFilter(QObject *watched, QEvent *event)
+{
+    auto *menu = qobject_cast<QMenu *>(watched);
+
+    if (!menu) {
+        return KDecoration3::DecorationButtonGroup::eventFilter(watched, event);
+    }
+
+    if (event->type() == QEvent::MouseMove) {
+        if (KWindowSystem::isPlatformX11()) {
+            auto *e = static_cast<QMouseEvent *>(event);
+            auto *deco = const_cast<Decoration *>(qobject_cast<const Decoration *>(decoration()));
+            if (deco) {
+                // Forward a constructed HoverEvent to the decoration to handle.
+                // This is a workaround for X11 where the decoration does not receive
+                // hover events while a menu is open.
+                QPointF localPos = e->globalPosition() - deco->windowPos();
+                localPos.setY(localPos.y() + deco->borderTop());
+
+                QHoverEvent hoverEvent(QEvent::HoverMove,
+                                       localPos,
+                                       e->globalPosition(),
+                                       localPos,
+                                       e->modifiers(),
+                                       static_cast<const QPointingDevice *>(e->device()));
+                QApplication::sendEvent(deco, &hoverEvent);
+            }
+        }
+        return false;
+    }
+
+    return KDecoration3::DecorationButtonGroup::eventFilter(watched, event);
+}
+
+bool AppMenuButtonGroup::isMenuOpen() const
+{
+    return 0 <= m_currentIndex;
+}
+
+void AppMenuButtonGroup::unpressAllButtons()
+{
+    for (auto &tb : std::as_const(m_textButtons)) {
+        if (tb)
+            tb->forceUnpress();
+    }
+    if (m_overflowButton) {
+        m_overflowButton->forceUnpress();
+    }
+    if (m_searchButton) {
+        m_searchButton->forceUnpress();
+    }
+}
+
+void AppMenuButtonGroup::updateShowing()
+{
+    setShowing(alwaysShow() || m_hovered || isMenuOpen());
+}
+
+void AppMenuButtonGroup::onMenuAboutToHide()
+{
+    QMenu *menu = qobject_cast<QMenu *>(sender());
+    if (!menu) {
+        return;
+    }
+
+    if (auto navMenu = qobject_cast<NavigableMenu *>(menu)) {
+        disconnect(navMenu, &NavigableMenu::hitLeft, this, &AppMenuButtonGroup::onHitLeft);
+        disconnect(navMenu, &NavigableMenu::hitRight, this, &AppMenuButtonGroup::onHitRight);
+    }
+
+    if (m_searchButton && menu != m_searchButton->menu()) {
+        menu->removeEventFilter(this);
+    }
+
+    if (AppMenuButton *currentButton = getAppMenuButton(m_currentIndex)) {
+        currentButton->setChecked(false);
+    }
+    setCurrentIndex(-1);
+    m_currentMenu = nullptr;
+    m_hoveredButton = nullptr;
+}
+
+void AppMenuButtonGroup::onHitLeft()
+{
+    int desiredIndex = findNextVisibleButtonIndex(m_currentIndex, false);
+    trigger(desiredIndex, true);
+}
+
+void AppMenuButtonGroup::onHitRight()
+{
+    int desiredIndex = findNextVisibleButtonIndex(m_currentIndex, true);
+    trigger(desiredIndex, true);
+}
+
+// when the rise animation occurs, the widget can move under the mouse pointer, rather than the mouse pointer moving over the widget
+// In this case, at the end of the animation, the button won't be in a hovered state even if the mouse pointer is over the button
+// Therefore, create a QHoverEvent manually for this situation
+void AppMenuButtonGroup::sendFakeHoverEventAtCursorPosition()
+{
+    auto *deco = const_cast<Decoration *>(qobject_cast<const Decoration *>(decoration()));
+    if (deco) {
+        QPointF globalPos = QCursor::pos();
+        QPointF localPos;
+        if (KWindowSystem::isPlatformX11()) {
+            localPos = globalPos - deco->windowPos();
+        } else {
+            localPos = globalPos;
+        }
+        QRectF hoverArea = titleHoverArea();
+        if (!hoverArea.isNull() && hoverArea.contains(localPos)) {
+            QHoverEvent hoverEvent(QEvent::HoverMove, localPos, globalPos, localPos);
+            QApplication::sendEvent(deco, &hoverEvent);
+        }
+    }
+}
+
+void AppMenuButtonGroup::onShowingChanged(bool showing)
+{
+    if (m_animationEnabled && m_animation->duration() > 0) {
+        const QAbstractAnimation::Direction dir = showing ? QAbstractAnimation::Forward : QAbstractAnimation::Backward;
+        if (m_animation->state() == QAbstractAnimation::Running && m_animation->direction() != dir) {
+            m_animation->stop();
+        }
+        m_animation->setDirection(dir);
+        if (m_animation->state() != QAbstractAnimation::Running) {
+            m_animation->start();
+        }
+    } else {
+        const qreal target = showing ? 1.0 : 0.0;
+        onAnimationValueChanged(QVariant(target));
+    }
+}
+
+void AppMenuButtonGroup::onAnimationValueChanged(const QVariant &value)
+{
+    if (expandsOnHover()) {
+        setExpansionFraction(value.toReal());
+        if (m_behaviour == AppMenuBehaviour::RevealOnHover)
+            setOpacity(value.toReal());
+    } else {
+        setOpacity(value.toReal());
+    }
+
+    if (expandsOnHover() || risesOnHover()) {
+        Q_EMIT geometryAnimationChanged(value.toReal());
+    }
+
+    if (risesOnHover() && qFuzzyCompare(value.toReal(), 1.0)) {
+        sendFakeHoverEventAtCursorPosition();
+    }
+}
+
+void AppMenuButtonGroup::onSubMenuReady(QMenu *menu)
+{
+    if (m_searchButton) {
+        m_searchButton->clearCache();
+        if (m_searchButton->isUiVisible()) {
+            m_searchButton->startDebounceIfHasLastQuery();
+        }
+    }
+
+    if (m_buttonIndexWaitingForPopup == -1 || !m_appMenuModel || !m_appMenuModel->menu()) {
+        return;
+    }
+
+    const auto actions = m_appMenuModel->menu()->actions();
+    if (m_buttonIndexWaitingForPopup >= actions.count()) {
+        m_buttonIndexWaitingForPopup = -1;
+        return;
+    }
+
+    QAction *action = actions.at(m_buttonIndexWaitingForPopup);
+    if (action && action->menu() == menu) {
+        // The menu we were waiting for is now ready.
+        // We can now trigger the button again to pop it up.
+        // It is crucial to reset the waiting index *before* calling trigger
+        // to prevent an infinite loop.
+        const int buttonIndex = m_buttonIndexWaitingForPopup;
+        m_buttonIndexWaitingForPopup = -1;
+
+        if (menu->actions().isEmpty()) {
+            popupMenu(menu, buttonIndex);
+        } else {
+            trigger(buttonIndex, m_immediateTransition);
+        }
+    }
+}
+
+AppMenuButton *AppMenuButtonGroup::getAppMenuButton(int index) const
+{
+    if (index == m_searchIndex) {
+        return m_searchButton;
+    } else if (index == m_overflowIndex) {
+        return m_overflowButton;
+    } else if (index >= 0 && index < m_textButtons.count()) {
+        return m_textButtons.at(index);
+    }
+    return nullptr;
+}
+
+int AppMenuButtonGroup::findNextVisibleButtonIndex(int currentIndex, bool forward) const
+{
+    int maxIndex = m_textButtons.count() - 1;
+    if (m_overflowIndex > maxIndex)
+        maxIndex = m_overflowIndex;
+    if (m_searchIndex > maxIndex)
+        maxIndex = m_searchIndex;
+
+    if (maxIndex < 0) {
+        return -1;
+    }
+
+    bool isRtl = QGuiApplication::layoutDirection() == Qt::RightToLeft;
+    // In RTL, the "next" button visually (forward=true) is at a lower index.
+    int step = (forward ^ isRtl) ? 1 : -1;
+
+    // Start from the next button, not the current one
+    int newIndex = currentIndex + step;
+
+    for (int i = 0; i <= maxIndex; ++i) {
+        // Wrap around logic
+        if (newIndex < 0) {
+            newIndex = maxIndex;
+        } else if (newIndex > maxIndex) {
+            newIndex = 0;
+        }
+
+        if (AppMenuButton *button = getAppMenuButton(newIndex)) {
+            if (button->isVisible() && button->isEnabled()) {
+                return newIndex;
+            }
+        }
+
+        newIndex += step;
+    }
+
+    return currentIndex; // Fallback to current index if no other visible button is found
+}
+
+void AppMenuButtonGroup::handleHoverMove(const QPointF &pos)
+{
+    if (!isMenuOpen()) {
+        return;
+    }
+
+    KDecoration3::DecorationButton *newHoveredButton = buttonAt(pos);
+
+    if (m_hoveredButton != newHoveredButton) {
+        m_hoveredButton = newHoveredButton;
+
+        if (m_hoveredButton) {
+            // All buttons in this group are AppMenuButtons
+            auto *appMenuButton = qobject_cast<AppMenuButton *>(m_hoveredButton.data());
+            if (appMenuButton && m_currentIndex != appMenuButton->buttonIndex() && appMenuButton->isVisible() && appMenuButton->isEnabled()) {
+                trigger(appMenuButton->buttonIndex(), false);
+            }
+        }
+    }
+}
+
+} // namespace Klassy

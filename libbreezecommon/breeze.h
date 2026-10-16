@@ -48,7 +48,7 @@ struct KLASSYCOMMON_EXPORT PenWidth {
     static constexpr int NoPen = 0;
 };
 
-// copied from KDecoration3/src/decorationdefines.h -- needs to be kept in sync
+// copied from KDecoration3/src/decorationdefines.h -- needs to be kept in sync but with the two extra values
 // originally Klassy linked directly to KDecoration3 but this did not work on the combined Qt5/Qt6 build on Plasma 6 with Qt5 applications
 enum class DecorationButtonType {
     /**
@@ -116,6 +116,22 @@ enum class DecorationButtonType {
      * but it can be made always visible via settings.
      **/
     ExcludeFromCapture,
+
+    /**
+     * Custom value for the AppMenuBar text buttons.
+     * Is only used internally & for configuration.
+     */
+    CustomAppMenuBarMenu = 10000,
+    /**
+     * Custom value for the AppMenuBar menu overflow button.
+     * Is only used internally & for configuration.
+     */
+    CustomAppMenuBarOverflow = 10001,
+    /**
+     * Custom value for the AppMenuBar menu search button.
+     * Is only used internally & for configuration.
+     */
+    CustomAppMenuBarSearch = 10002,
 };
 
 inline DecorationButtonType buttonTypeFromKcfgColorIndex(int index)
@@ -132,6 +148,9 @@ inline DecorationButtonType buttonTypeFromKcfgColorIndex(int index)
         DecorationButtonType::KeepBelow,
         DecorationButtonType::KeepAbove,
         DecorationButtonType::ExcludeFromCapture,
+        DecorationButtonType::CustomAppMenuBarMenu,
+        DecorationButtonType::CustomAppMenuBarOverflow,
+        DecorationButtonType::CustomAppMenuBarSearch,
     };
     if (index < 0 || index >= kcfgIndexToButtonType.length())
         return DecorationButtonType::Custom;
@@ -152,6 +171,9 @@ inline int buttonTypeToKcfgColorIndex(DecorationButtonType type)
         {DecorationButtonType::KeepBelow, 8},
         {DecorationButtonType::KeepAbove, 9},
         {DecorationButtonType::ExcludeFromCapture, 10},
+        {DecorationButtonType::CustomAppMenuBarMenu, 11},
+        {DecorationButtonType::CustomAppMenuBarOverflow, 12},
+        {DecorationButtonType::CustomAppMenuBarSearch, 13},
     };
     return buttonTypeToKcfgIndex[type];
 }
@@ -163,7 +185,14 @@ static QStringList windecoExceptionKeys = {
     "ExceptionWindowPropertyPattern",
     "ExceptionWindowPropertyType",
     "ExceptionPreset",
+    "HideTitleBarChecked",
     "HideTitleBar",
+    "ExceptionShowInTitle",
+    "ExceptionShowTitleDocumentName",
+    "ExceptionShowTitleAppIcon",
+    "ExceptionShowTitleAppName",
+    "ExceptionAppMenuBarBehaviourChecked",
+    "ExceptionAppMenuBarBehaviour",
     "OpaqueTitleBar",
     "ExceptionMatchTitleBarToApplicationColor",
     "ExceptionBorder",

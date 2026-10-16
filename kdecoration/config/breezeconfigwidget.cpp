@@ -22,6 +22,7 @@
 #include <QScreen>
 #include <QStackedLayout>
 #include <QStackedWidget>
+#include <QStandardItemModel>
 #include <QTimer>
 #include <QWindow>
 
@@ -47,6 +48,7 @@ ConfigWidget::ConfigWidget(QObject *parent, const KPluginMetaData &data, const Q
     : KCModule(parent, data)
     , m_configuration(KSharedConfig::openConfig(QStringLiteral("klassy/klassyrc")))
     , m_presetsConfiguration(KSharedConfig::openConfig(QStringLiteral("klassy/windecopresetsrc")))
+    , m_kwinConfiguration(KSharedConfig::openConfig(QStringLiteral("kwinrc")))
     , m_changed(false)
 {
     // this is a hack to get an Apply button
@@ -65,7 +67,7 @@ ConfigWidget::ConfigWidget(QObject *parent, const KPluginMetaData &data, const Q
     // configuration
     m_ui.setupUi(widget());
 
-    m_ui.defaultExceptions->setKConfig(m_configuration, m_presetsConfiguration);
+    m_ui.bundledExceptions->setKConfig(m_configuration, m_presetsConfiguration);
     m_ui.exceptions->setKConfig(m_configuration, m_presetsConfiguration);
 
     // add the "Presets..." button
@@ -90,14 +92,14 @@ ConfigWidget::ConfigWidget(QObject *parent, const KPluginMetaData &data, const Q
         }
     }
 
-    // hide the push buttons for default exceptions
-    QList<QPushButton *> defaultPushButtons = m_ui.defaultExceptions->findChildren<QPushButton *>();
-    for (QPushButton *defaultPushButton : defaultPushButtons) {
-        QSizePolicy spRetain = defaultPushButton->sizePolicy();
+    // hide the push buttons for bundled exceptions
+    QList<QPushButton *> bundledPushButtons = m_ui.bundledExceptions->findChildren<QPushButton *>();
+    for (QPushButton *bundledPushButton : bundledPushButtons) {
+        QSizePolicy spRetain = bundledPushButton->sizePolicy();
         spRetain.setRetainSizeWhenHidden(true);
-        defaultPushButton->setSizePolicy(spRetain);
+        bundledPushButton->setSizePolicy(spRetain);
 
-        defaultPushButton->hide();
+        bundledPushButton->hide();
     }
 
     m_unlockedIcon.addFile(QStringLiteral(":/klassy_config_icons/object-unlocked-symbolic.svg"), QSize(16, 16));
@@ -113,6 +115,7 @@ ConfigWidget::ConfigWidget(QObject *parent, const KPluginMetaData &data, const Q
     m_buttonBehaviourDialog = new ButtonBehaviour(m_configuration, m_presetsConfiguration, this);
     m_titleBarSpacingDialog = new TitleBarSpacing(m_configuration, m_presetsConfiguration, this);
     m_titleBarOpacityDialog = new TitleBarOpacity(m_configuration, m_presetsConfiguration, this);
+    m_titleBarMenuDialog = new TitleBarAppMenuBar(m_configuration, m_presetsConfiguration, this);
     m_windowOutlineStyleDialog = new WindowOutlineStyle(m_configuration, m_presetsConfiguration, this);
     m_shadowStyleDialog = new ShadowStyle(m_configuration, m_presetsConfiguration, this);
 
@@ -122,6 +125,7 @@ ConfigWidget::ConfigWidget(QObject *parent, const KPluginMetaData &data, const Q
     connect(m_buttonBehaviourDialog, &ButtonBehaviour::changed, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_titleBarSpacingDialog, &TitleBarSpacing::changed, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_titleBarOpacityDialog, &TitleBarOpacity::changed, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_titleBarMenuDialog, &TitleBarAppMenuBar::changed, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_windowOutlineStyleDialog, &WindowOutlineStyle::changed, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_shadowStyleDialog, &ShadowStyle::changed, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
 
@@ -137,12 +141,14 @@ ConfigWidget::ConfigWidget(QObject *parent, const KPluginMetaData &data, const Q
     // set the long version string if from the git master
     m_ui.version->setText("v" + klassyLongVersion());
 
+    // UI only buttons
     connect(m_ui.systemIconGenerationButton, &QAbstractButton::clicked, this, &ConfigWidget::systemIconGenerationButtonClicked);
     connect(m_ui.buttonSizingButton, &QAbstractButton::clicked, this, &ConfigWidget::buttonSizingButtonClicked);
     connect(m_ui.buttonColorsButton, &QAbstractButton::clicked, this, &ConfigWidget::buttonColorsButtonClicked);
     connect(m_ui.buttonBehaviourButton, &QAbstractButton::clicked, this, &ConfigWidget::buttonBehaviourButtonClicked);
     connect(m_ui.titleBarSpacingButton, &QAbstractButton::clicked, this, &ConfigWidget::titleBarSpacingButtonClicked);
     connect(m_ui.titleBarOpacityButton, &QAbstractButton::clicked, this, &ConfigWidget::titleBarOpacityButtonClicked);
+    connect(m_ui.titleBarAppMenuBarButton, &QAbstractButton::clicked, this, &ConfigWidget::titleBarAppMenuBarButtonClicked);
     connect(m_ui.windowOutlineStyleButton, &QAbstractButton::clicked, this, &ConfigWidget::windowOutlineStyleButtonClicked);
     connect(m_ui.shadowStyleButton, &QAbstractButton::clicked, this, &ConfigWidget::shadowStyleButtonClicked);
 
@@ -150,23 +156,40 @@ ConfigWidget::ConfigWidget(QObject *parent, const KPluginMetaData &data, const Q
 
     // track ui changes
     // direct connections are used in several places so the slot can detect the immediate m_loading status (not available in a queued connection)
+
+    // buttons
     connect(m_ui.buttonIconStyle, SIGNAL(currentIndexChanged(int)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
     connect(m_ui.buttonIconStyle, SIGNAL(currentIndexChanged(int)), SLOT(onIconsChanged()), Qt::ConnectionType::DirectConnection);
     connect(m_ui.buttonShape, SIGNAL(currentIndexChanged(int)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
     connect(m_ui.iconSize, SIGNAL(currentIndexChanged(int)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
     connect(m_ui.systemIconSize, SIGNAL(currentIndexChanged(int)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
-    connect(m_ui.cornerRadius, SIGNAL(valueChanged(double)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
+    connect(m_ui.forceColorizeSystemIcons, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.boldButtonIcons, SIGNAL(currentIndexChanged(int)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
     connect(m_ui.boldButtonIcons, qOverload<int>(&QComboBox::currentIndexChanged), this, &ConfigWidget::updateWindowControlPreviewIcons);
-    connect(m_ui.drawBorderOnMaximizedWindows, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+
+    // titlebar
+    connect(m_ui.showTitleDocumentName, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.showTitleAppIcon, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.showTitleAppName, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.matchTitleBarToApplicationColor, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.titleBarAppMenuBarEnabled,
+            &QAbstractButton::toggled,
+            this,
+            &ConfigWidget::getButtonsOrderFromKwinConfig,
+            Qt::ConnectionType::DirectConnection); // neded before updateChanged
+    connect(m_ui.titleBarAppMenuBarEnabled, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.titleBarAppMenuBarEnabled, &QAbstractButton::toggled, this, &ConfigWidget::setAppMenuBarButtonEnabledState);
     connect(m_ui.drawBackgroundGradient, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.drawTitleBarSeparator, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.boldTitle, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.underlineTitle, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
-    connect(m_ui.useTitleBarColorForAllBorders, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+
+    // window
+    connect(m_ui.cornerRadius, SIGNAL(valueChanged(double)), SLOT(updateChanged()), Qt::ConnectionType::DirectConnection);
     connect(m_ui.roundAllCornersWhenNoBorders, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
-    connect(m_ui.forceColorizeSystemIcons, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.useTitleBarColorForAllBorders, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.drawBorderOnMaximizedWindows, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.colorizeWindowOutlineWithButton, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
 
     // only enable animationsSpeed when animationsEnabled is checked
     connect(m_ui.animationsEnabled, &QAbstractButton::toggled, this, &ConfigWidget::setEnabledAnimationsSpeed);
@@ -175,10 +198,8 @@ ConfigWidget::ConfigWidget(QObject *parent, const KPluginMetaData &data, const Q
     connect(m_ui.animationsEnabled, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.animationsSpeedRelativeSystem, SIGNAL(valueChanged(int)), SLOT(updateChanged()));
 
-    connect(m_ui.colorizeWindowOutlineWithButton, &QAbstractButton::toggled, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
-
     // track exception changes
-    connect(m_ui.defaultExceptions, &ExceptionListWidget::changed, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
+    connect(m_ui.bundledExceptions, &ExceptionListWidget::changed, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
     connect(m_ui.exceptions, &ExceptionListWidget::changed, this, &ConfigWidget::updateChanged, Qt::ConnectionType::DirectConnection);
 
     QApplication::instance()->installEventFilter(this); // to monitor palette changes in the app (can't get them from this)
@@ -204,26 +225,36 @@ void ConfigWidget::load()
     updateWindowControlPreviewIcons();
 
     // assign to ui
+
+    // buttons
     m_ui.buttonIconStyle->setCurrentIndex(m_internalSettings->buttonIconStyle());
     m_ui.buttonShape->setCurrentIndex(m_internalSettings->buttonShape());
     m_ui.iconSize->setCurrentIndex(m_internalSettings->iconSize());
     m_ui.systemIconSize->setCurrentIndex(m_internalSettings->systemIconSize());
-    m_ui.cornerRadius->setValue(m_internalSettings->windowCornerRadius());
-
-    m_ui.drawBorderOnMaximizedWindows->setChecked(m_internalSettings->drawBorderOnMaximizedWindows());
+    m_ui.forceColorizeSystemIcons->setChecked(m_internalSettings->forceColorizeSystemIcons());
     m_ui.boldButtonIcons->setCurrentIndex(m_internalSettings->boldButtonIcons());
+
+    // titlebar
+    m_ui.showTitleDocumentName->setChecked(m_internalSettings->showTitleDocumentName());
+    m_ui.showTitleAppIcon->setChecked(m_internalSettings->showTitleAppIcon());
+    m_ui.showTitleAppName->setChecked(m_internalSettings->showTitleAppName());
     m_ui.matchTitleBarToApplicationColor->setChecked(m_internalSettings->matchTitleBarToApplicationColor());
+    setAppMenuBarEnabledCheckBoxState();
     m_ui.drawBackgroundGradient->setChecked(m_internalSettings->drawBackgroundGradient());
     m_ui.drawTitleBarSeparator->setChecked(m_internalSettings->drawTitleBarSeparator());
     m_ui.boldTitle->setChecked(m_internalSettings->boldTitle());
     m_ui.underlineTitle->setChecked(m_internalSettings->underlineTitle());
+
+    // window
+    m_ui.cornerRadius->setValue(m_internalSettings->windowCornerRadius());
+    m_ui.roundAllCornersWhenNoBorders->setChecked(m_internalSettings->roundAllCornersWhenNoBorders());
+    m_ui.useTitleBarColorForAllBorders->setChecked(m_internalSettings->useTitleBarColorForAllBorders());
+    m_ui.drawBorderOnMaximizedWindows->setChecked(m_internalSettings->drawBorderOnMaximizedWindows());
+    m_ui.colorizeWindowOutlineWithButton->setChecked(m_internalSettings->colorizeWindowOutlineWithButton());
+
+    // animations
     m_ui.animationsEnabled->setChecked(m_internalSettings->animationsEnabled());
     m_ui.animationsSpeedRelativeSystem->setValue(m_internalSettings->animationsSpeedRelativeSystem());
-    m_ui.useTitleBarColorForAllBorders->setChecked(m_internalSettings->useTitleBarColorForAllBorders());
-    m_ui.roundAllCornersWhenNoBorders->setChecked(m_internalSettings->roundAllCornersWhenNoBorders());
-    m_ui.forceColorizeSystemIcons->setChecked(m_internalSettings->forceColorizeSystemIcons());
-
-    m_ui.colorizeWindowOutlineWithButton->setChecked(m_internalSettings->colorizeWindowOutlineWithButton());
 
     onIconsChanged();
 
@@ -234,18 +265,19 @@ void ConfigWidget::load()
     m_buttonBehaviourDialog->load();
     m_titleBarSpacingDialog->load();
     m_titleBarOpacityDialog->load();
+    m_titleBarMenuDialog->load();
     m_windowOutlineStyleDialog->load();
     m_shadowStyleDialog->load();
 
     // load exceptions
     DecorationExceptionList exceptions;
     exceptions.readConfig(m_configuration);
-    if (exceptions.numberDefaults()) {
-        m_ui.defaultExceptions->setExceptions(exceptions.getDefault());
+    if (exceptions.numberBundled()) {
+        m_ui.bundledExceptions->setExceptions(exceptions.getBundled());
     } else {
-        m_ui.defaultExceptions->hide();
-        m_ui.defaultExceptionsLabel->hide();
-        m_ui.defaultExceptionsSpacer->setGeometry(QRect());
+        m_ui.bundledExceptions->hide();
+        m_ui.bundledExceptionsLabel->hide();
+        m_ui.bundledExceptionsSpacer->setGeometry(QRect());
     }
     m_ui.exceptions->setExceptions(exceptions.get());
     setNeedsSave(false);
@@ -265,24 +297,36 @@ void ConfigWidget::saveMain(QString saveAsPresetName)
     m_internalSettings->load();
 
     // apply modifications from ui
+
+    // buttons
     m_internalSettings->setButtonIconStyle(m_ui.buttonIconStyle->currentIndex());
     m_internalSettings->setButtonShape(m_ui.buttonShape->currentIndex());
     m_internalSettings->setIconSize(m_ui.iconSize->currentIndex());
     m_internalSettings->setSystemIconSize(m_ui.systemIconSize->currentIndex());
-    m_internalSettings->setWindowCornerRadius(m_ui.cornerRadius->value());
+    m_internalSettings->setForceColorizeSystemIcons(m_ui.forceColorizeSystemIcons->isChecked());
     m_internalSettings->setBoldButtonIcons(m_ui.boldButtonIcons->currentIndex());
-    m_internalSettings->setDrawBorderOnMaximizedWindows(m_ui.drawBorderOnMaximizedWindows->isChecked());
+
+    // titlebar
+    m_internalSettings->setShowTitleDocumentName(m_ui.showTitleDocumentName->isChecked());
+    m_internalSettings->setShowTitleAppIcon(m_ui.showTitleAppIcon->isChecked());
+    m_internalSettings->setShowTitleAppName(m_ui.showTitleAppName->isChecked());
     m_internalSettings->setMatchTitleBarToApplicationColor(m_ui.matchTitleBarToApplicationColor->isChecked());
+    m_internalSettings->setAppMenuBarEnabled(m_ui.titleBarAppMenuBarEnabled->isChecked());
     m_internalSettings->setDrawBackgroundGradient(m_ui.drawBackgroundGradient->isChecked());
     m_internalSettings->setDrawTitleBarSeparator(m_ui.drawTitleBarSeparator->isChecked());
     m_internalSettings->setBoldTitle(m_ui.boldTitle->isChecked());
     m_internalSettings->setUnderlineTitle(m_ui.underlineTitle->isChecked());
+
+    // window
+    m_internalSettings->setWindowCornerRadius(m_ui.cornerRadius->value());
+    m_internalSettings->setRoundAllCornersWhenNoBorders(m_ui.roundAllCornersWhenNoBorders->isChecked());
+    m_internalSettings->setUseTitleBarColorForAllBorders(m_ui.useTitleBarColorForAllBorders->isChecked());
+    m_internalSettings->setDrawBorderOnMaximizedWindows(m_ui.drawBorderOnMaximizedWindows->isChecked());
+    m_internalSettings->setColorizeWindowOutlineWithButton(m_ui.colorizeWindowOutlineWithButton->isChecked());
+
+    // animations
     m_internalSettings->setAnimationsEnabled(m_ui.animationsEnabled->isChecked());
     m_internalSettings->setAnimationsSpeedRelativeSystem(m_ui.animationsSpeedRelativeSystem->value());
-    m_internalSettings->setUseTitleBarColorForAllBorders(m_ui.useTitleBarColorForAllBorders->isChecked());
-    m_internalSettings->setRoundAllCornersWhenNoBorders(m_ui.roundAllCornersWhenNoBorders->isChecked());
-    m_internalSettings->setForceColorizeSystemIcons(m_ui.forceColorizeSystemIcons->isChecked());
-    m_internalSettings->setColorizeWindowOutlineWithButton(m_ui.colorizeWindowOutlineWithButton->isChecked());
 
     m_systemIconGenerationDialog->save(false);
     m_buttonSizingDialog->save(false);
@@ -290,6 +334,7 @@ void ConfigWidget::saveMain(QString saveAsPresetName)
     m_buttonBehaviourDialog->save(false);
     m_titleBarSpacingDialog->save(false);
     m_titleBarOpacityDialog->save(false);
+    m_titleBarMenuDialog->save(false);
     m_shadowStyleDialog->save(false);
     m_windowOutlineStyleDialog->save(false);
 
@@ -298,11 +343,13 @@ void ConfigWidget::saveMain(QString saveAsPresetName)
 
     // get list of exceptions and write
     InternalSettingsList exceptions(m_ui.exceptions->exceptions());
-    InternalSettingsList defaultExceptions(m_ui.defaultExceptions->exceptions());
+    InternalSettingsList defaultExceptions(m_ui.bundledExceptions->exceptions());
     DecorationExceptionList(exceptions, defaultExceptions).writeConfig(m_configuration);
 
     // sync configuration for exceptions
     m_configuration->sync();
+
+    setAppMenuButtonInKwinConfig();
 
     setNeedsSave(false);
     Q_EMIT saved();
@@ -338,25 +385,38 @@ void ConfigWidget::defaults()
     m_internalSettings = InternalSettingsPtr(new InternalSettings());
     m_internalSettings->setDefaults();
 
+    getButtonsOrderFromKwinConfig(); // needed in setAppMenuBarEnabledCheckBoxState
     // assign to ui
+
+    // buttons
     m_ui.buttonIconStyle->setCurrentIndex(m_internalSettings->buttonIconStyle());
     m_ui.buttonShape->setCurrentIndex(m_internalSettings->buttonShape());
     m_ui.iconSize->setCurrentIndex(m_internalSettings->iconSize());
     m_ui.systemIconSize->setCurrentIndex(m_internalSettings->systemIconSize());
-    m_ui.cornerRadius->setValue(m_internalSettings->windowCornerRadius());
+    m_ui.forceColorizeSystemIcons->setChecked(m_internalSettings->forceColorizeSystemIcons());
     m_ui.boldButtonIcons->setCurrentIndex(m_internalSettings->boldButtonIcons());
-    m_ui.drawBorderOnMaximizedWindows->setChecked(m_internalSettings->drawBorderOnMaximizedWindows());
+
+    // titlebar
+    m_ui.showTitleDocumentName->setChecked(m_internalSettings->showTitleDocumentName());
+    m_ui.showTitleAppIcon->setChecked(m_internalSettings->showTitleAppIcon());
+    m_ui.showTitleAppName->setChecked(m_internalSettings->showTitleAppName());
     m_ui.matchTitleBarToApplicationColor->setChecked(m_internalSettings->matchTitleBarToApplicationColor());
+    setAppMenuBarEnabledCheckBoxState();
     m_ui.drawBackgroundGradient->setChecked(m_internalSettings->drawBackgroundGradient());
-    m_ui.animationsEnabled->setChecked(m_internalSettings->animationsEnabled());
-    m_ui.animationsSpeedRelativeSystem->setValue(m_internalSettings->animationsSpeedRelativeSystem());
     m_ui.drawTitleBarSeparator->setChecked(m_internalSettings->drawTitleBarSeparator());
     m_ui.boldTitle->setChecked(m_internalSettings->boldTitle());
     m_ui.underlineTitle->setChecked(m_internalSettings->underlineTitle());
-    m_ui.useTitleBarColorForAllBorders->setChecked(m_internalSettings->useTitleBarColorForAllBorders());
+
+    // window
+    m_ui.cornerRadius->setValue(m_internalSettings->windowCornerRadius());
     m_ui.roundAllCornersWhenNoBorders->setChecked(m_internalSettings->roundAllCornersWhenNoBorders());
-    m_ui.forceColorizeSystemIcons->setChecked(m_internalSettings->forceColorizeSystemIcons());
+    m_ui.useTitleBarColorForAllBorders->setChecked(m_internalSettings->useTitleBarColorForAllBorders());
+    m_ui.drawBorderOnMaximizedWindows->setChecked(m_internalSettings->drawBorderOnMaximizedWindows());
     m_ui.colorizeWindowOutlineWithButton->setChecked(m_internalSettings->colorizeWindowOutlineWithButton());
+
+    // animations
+    m_ui.animationsEnabled->setChecked(m_internalSettings->animationsEnabled());
+    m_ui.animationsSpeedRelativeSystem->setValue(m_internalSettings->animationsSpeedRelativeSystem());
 
     // set defaults in dialogs
     m_systemIconGenerationDialog->defaults();
@@ -365,18 +425,19 @@ void ConfigWidget::defaults()
     m_buttonBehaviourDialog->defaults();
     m_titleBarSpacingDialog->defaults();
     m_titleBarOpacityDialog->defaults();
+    m_titleBarMenuDialog->defaults();
     m_windowOutlineStyleDialog->defaults();
     m_shadowStyleDialog->defaults();
 
     updateWindowControlPreviewIcons();
 
-    // load default exceptions and refresh (leave user-set exceptions alone)
+    // load bundled exceptions and refresh default enabled states (leave user-set exceptions alone)
     DecorationExceptionList exceptions;
     exceptions.readConfig(m_configuration, true);
-    if (exceptions.numberDefaults()) {
-        m_ui.defaultExceptions->setExceptions(exceptions.getDefault());
+    if (exceptions.numberBundled()) {
+        m_ui.bundledExceptions->setExceptions(exceptions.getBundled());
     } else {
-        m_ui.defaultExceptions->hide();
+        m_ui.bundledExceptions->hide();
     }
 
     onIconsChanged();
@@ -422,6 +483,10 @@ bool ConfigWidget::isDefaults()
         return false;
     }
 
+    if (!m_titleBarMenuDialog->isDefaults()) {
+        return false;
+    }
+
     if (!m_windowOutlineStyleDialog->isDefaults()) {
         return false;
     }
@@ -447,19 +512,8 @@ void ConfigWidget::updateChanged()
     // track modifications
     bool modified(false);
 
-    if (m_ui.drawTitleBarSeparator->isChecked() != m_internalSettings->drawTitleBarSeparator())
-        modified = true;
-    else if (m_ui.boldTitle->isChecked() != m_internalSettings->boldTitle())
-        modified = true;
-    else if (m_ui.underlineTitle->isChecked() != m_internalSettings->underlineTitle())
-        modified = true;
-    else if (m_ui.useTitleBarColorForAllBorders->isChecked() != m_internalSettings->useTitleBarColorForAllBorders())
-        modified = true;
-    else if (m_ui.roundAllCornersWhenNoBorders->isChecked() != m_internalSettings->roundAllCornersWhenNoBorders())
-        modified = true;
-    else if (m_ui.forceColorizeSystemIcons->isChecked() != m_internalSettings->forceColorizeSystemIcons())
-        modified = true;
-    else if (m_ui.buttonIconStyle->currentIndex() != m_internalSettings->buttonIconStyle())
+    // buttons
+    if (m_ui.buttonIconStyle->currentIndex() != m_internalSettings->buttonIconStyle())
         modified = true;
     else if (m_ui.buttonShape->currentIndex() != m_internalSettings->buttonShape())
         modified = true;
@@ -467,15 +521,42 @@ void ConfigWidget::updateChanged()
         modified = true;
     else if (m_ui.systemIconSize->currentIndex() != m_internalSettings->systemIconSize())
         modified = true;
+    else if (m_ui.forceColorizeSystemIcons->isChecked() != m_internalSettings->forceColorizeSystemIcons())
+        modified = true;
     else if (m_ui.boldButtonIcons->currentIndex() != m_internalSettings->boldButtonIcons())
         modified = true;
-    else if (m_ui.drawBorderOnMaximizedWindows->isChecked() != m_internalSettings->drawBorderOnMaximizedWindows())
+
+    // titlebar
+    else if (m_ui.showTitleDocumentName->isChecked() != m_internalSettings->showTitleDocumentName())
+        modified = true;
+    else if (m_ui.showTitleAppIcon->isChecked() != m_internalSettings->showTitleAppIcon())
+        modified = true;
+    else if (m_ui.showTitleAppName->isChecked() != m_internalSettings->showTitleAppName())
         modified = true;
     else if (m_ui.matchTitleBarToApplicationColor->isChecked() != m_internalSettings->matchTitleBarToApplicationColor())
         modified = true;
+    else if (m_ui.titleBarAppMenuBarEnabled->isChecked() != m_internalSettings->appMenuBarEnabled()
+             || (m_ui.titleBarAppMenuBarEnabled->isChecked() && m_hasApplicationMenu == false))
+        modified = true;
+    else if (m_ui.titleBarAppMenuBarEnabled->isChecked() != m_internalSettings->appMenuBarEnabled())
+        modified = true;
     else if (m_ui.drawBackgroundGradient->isChecked() != m_internalSettings->drawBackgroundGradient())
         modified = true;
+    else if (m_ui.drawTitleBarSeparator->isChecked() != m_internalSettings->drawTitleBarSeparator())
+        modified = true;
+    else if (m_ui.boldTitle->isChecked() != m_internalSettings->boldTitle())
+        modified = true;
+    else if (m_ui.underlineTitle->isChecked() != m_internalSettings->underlineTitle())
+        modified = true;
+
+    // window
     else if (qAbs(m_ui.cornerRadius->value() - m_internalSettings->windowCornerRadius()) > 0.001)
+        modified = true;
+    else if (m_ui.roundAllCornersWhenNoBorders->isChecked() != m_internalSettings->roundAllCornersWhenNoBorders())
+        modified = true;
+    else if (m_ui.useTitleBarColorForAllBorders->isChecked() != m_internalSettings->useTitleBarColorForAllBorders())
+        modified = true;
+    else if (m_ui.drawBorderOnMaximizedWindows->isChecked() != m_internalSettings->drawBorderOnMaximizedWindows())
         modified = true;
     else if (m_ui.colorizeWindowOutlineWithButton->isChecked() != m_internalSettings->colorizeWindowOutlineWithButton())
         modified = true;
@@ -499,13 +580,15 @@ void ConfigWidget::updateChanged()
         modified = true;
     else if (m_titleBarOpacityDialog->m_changed)
         modified = true;
+    else if (m_titleBarMenuDialog->m_changed)
+        modified = true;
     else if (m_windowOutlineStyleDialog->m_changed)
         modified = true;
     else if (m_shadowStyleDialog->m_changed)
         modified = true;
 
     // exceptions
-    else if (m_ui.defaultExceptions->isChanged())
+    else if (m_ui.bundledExceptions->isChanged())
         modified = true;
     else if (m_ui.exceptions->isChanged())
         modified = true;
@@ -559,44 +642,50 @@ void ConfigWidget::buttonSizingButtonClicked()
 
 void ConfigWidget::buttonColorsButtonClicked()
 {
-    m_buttonColorsDialog->setWindowTitle(i18n("Button Colours - Klassy Settings"));
+    m_buttonColorsDialog->setWindowTitle(i18n("Button Colours — Klassy Settings"));
     m_buttonColorsDialog->setWindowIcon(QIcon::fromTheme(QStringLiteral("color-management")));
     m_buttonColorsDialog->show();
 }
 
 void ConfigWidget::buttonBehaviourButtonClicked()
 {
-    m_buttonBehaviourDialog->setWindowTitle(i18n("Button Behaviour - Klassy Settings"));
+    m_buttonBehaviourDialog->setWindowTitle(i18n("Button Behaviour — Klassy Settings"));
     m_buttonBehaviourDialog->show();
 }
 
 void ConfigWidget::titleBarSpacingButtonClicked()
 {
-    m_titleBarSpacingDialog->setWindowTitle(i18n("Titlebar Spacing - Klassy Settings"));
+    m_titleBarSpacingDialog->setWindowTitle(i18n("Titlebar Spacing — Klassy Settings"));
     m_titleBarSpacingDialog->show();
 }
 
 void ConfigWidget::titleBarOpacityButtonClicked()
 {
-    m_titleBarOpacityDialog->setWindowTitle(i18n("Titlebar Opacity - Klassy Settings"));
+    m_titleBarOpacityDialog->setWindowTitle(i18n("Titlebar Opacity — Klassy Settings"));
     m_titleBarOpacityDialog->show();
+}
+
+void ConfigWidget::titleBarAppMenuBarButtonClicked()
+{
+    m_titleBarMenuDialog->setWindowTitle(i18n("Titlebar Application Menubar — Klassy Settings"));
+    m_titleBarMenuDialog->show();
 }
 
 void ConfigWidget::shadowStyleButtonClicked()
 {
-    m_shadowStyleDialog->setWindowTitle(i18n("Shadow Style - Klassy Settings"));
+    m_shadowStyleDialog->setWindowTitle(i18n("Shadow Style — Klassy Settings"));
     m_shadowStyleDialog->show();
 }
 
 void ConfigWidget::windowOutlineStyleButtonClicked()
 {
-    m_windowOutlineStyleDialog->setWindowTitle(i18n("Window Outline Style - Klassy Settings"));
+    m_windowOutlineStyleDialog->setWindowTitle(i18n("Window Outline Style — Klassy Settings"));
     m_windowOutlineStyleDialog->show();
 }
 
 void ConfigWidget::presetsButtonClicked()
 {
-    m_loadPresetDialog->setWindowTitle(i18n("Presets - Klassy Settings"));
+    m_loadPresetDialog->setWindowTitle(i18n("Presets — Klassy Settings"));
     m_loadPresetDialog->initPresetsList();
     m_loadPresetDialog->show();
 }
@@ -841,12 +930,14 @@ void ConfigWidget::getButtonsOrderFromKwinConfig()
     QString buttonsOnRight;
 
     //  read kwin button border setting
-    KSharedConfig::Ptr kwinConfig = KSharedConfig::openConfig(QStringLiteral("kwinrc"));
-    if (kwinConfig && kwinConfig->hasGroup(QStringLiteral("org.kde.kdecoration2"))) { // As of Plasma 6.3.3 this is still kdecoration2
-        KConfigGroup kdecoration3Group = kwinConfig->group(QStringLiteral("org.kde.kdecoration2"));
+    if (m_kwinConfiguration) {
+        m_kwinConfiguration->reparseConfiguration();
+    }
+    if (m_kwinConfiguration && m_kwinConfiguration->hasGroup(QStringLiteral("org.kde.kdecoration2"))) { // As of Plasma 6.7 this is still kdecoration2
+        KConfigGroup kdecorationGroup = m_kwinConfiguration->group(QStringLiteral("org.kde.kdecoration2"));
 
-        buttonsOnLeft = kdecoration3Group.readEntry(QStringLiteral("ButtonsOnLeft"), QStringLiteral("MSE"));
-        buttonsOnRight = kdecoration3Group.readEntry(QStringLiteral("ButtonsOnRight"), QStringLiteral("HIAX"));
+        buttonsOnLeft = kdecorationGroup.readEntry(QStringLiteral("ButtonsOnLeft"), QStringLiteral("MSE"));
+        buttonsOnRight = kdecorationGroup.readEntry(QStringLiteral("ButtonsOnRight"), QStringLiteral("HIAX"));
     } else {
         buttonsOnLeft = QStringLiteral("MSE");
         buttonsOnRight = QStringLiteral("HIAX");
@@ -869,6 +960,12 @@ void ConfigWidget::getButtonsOrderFromKwinConfig()
             m_hiddenButtons.append(buttonNames.key(*it));
         }
     }
+    // Have the AppMenuBar buttons appear before hidden ones if an application menu exists; otherwise at the end
+    m_hasApplicationMenu = visibleButtons.contains(QChar('N'));
+    int appMenuBarButtonIndex = m_hasApplicationMenu ? 0 : m_hiddenButtons.length();
+    m_hiddenButtons.insert(appMenuBarButtonIndex++, DecorationButtonType::CustomAppMenuBarMenu);
+    m_hiddenButtons.insert(appMenuBarButtonIndex++, DecorationButtonType::CustomAppMenuBarOverflow);
+    m_hiddenButtons.insert(appMenuBarButtonIndex++, DecorationButtonType::CustomAppMenuBarSearch);
 
     // Place a custom button type in the average position of these "other" button types
     QList<int> otherButtonIndexes{
@@ -939,6 +1036,72 @@ void ConfigWidget::getButtonsOrderFromKwinConfig()
     if (indexOfCustom >= 0) {
         m_visibleButtonsOrder.insert(indexOfCustom,
                                      DecorationButtonType::Custom); // dummy Custom button inserted for illustrating colour palettes in icons
+    }
+}
+
+void ConfigWidget::setAppMenuBarEnabledCheckBoxState()
+{
+    if (m_internalSettings->appMenuBarEnabled()) {
+        if (m_hasApplicationMenu) {
+            m_ui.titleBarAppMenuBarEnabled->setChecked(true);
+        } else {
+            m_ui.titleBarAppMenuBarEnabled->setChecked(false);
+        }
+    } else {
+        m_ui.titleBarAppMenuBarEnabled->setChecked(false);
+    }
+
+    m_ui.titleBarAppMenuBarButton->setEnabled(m_ui.titleBarAppMenuBarEnabled->isChecked());
+}
+
+void ConfigWidget::setAppMenuBarButtonEnabledState()
+{
+    m_ui.titleBarAppMenuBarButton->setEnabled(m_ui.titleBarAppMenuBarEnabled->isChecked());
+}
+
+void ConfigWidget::setAppMenuButtonInKwinConfig()
+{
+    getButtonsOrderFromKwinConfig();
+
+    if (!m_kwinConfiguration) {
+        return;
+    }
+
+    if (m_ui.titleBarAppMenuBarEnabled->isChecked()) {
+        if (m_hasApplicationMenu) {
+            return;
+        }
+
+        if (!m_kwinConfiguration->hasGroup(QStringLiteral("org.kde.kdecoration2"))) {
+            return;
+        }
+        KConfigGroup kdecorationGroup = m_kwinConfiguration->group(QStringLiteral("org.kde.kdecoration2"));
+
+        // add the ApplicationMenu button to the end of the leftButtons
+        QString leftButtons = kdecorationGroup.readEntry(QStringLiteral("ButtonsOnLeft"), QStringLiteral("MSE")) + "N";
+        kdecorationGroup.writeEntry(QStringLiteral("ButtonsOnLeft"), leftButtons);
+
+        m_kwinConfiguration->sync();
+
+    } else {
+        if (!m_hasApplicationMenu) {
+            return;
+        }
+
+        if (!m_kwinConfiguration->hasGroup(QStringLiteral("org.kde.kdecoration2"))) {
+            return;
+        }
+        KConfigGroup kdecorationGroup = m_kwinConfiguration->group(QStringLiteral("org.kde.kdecoration2"));
+
+        // remove any ApplicationMenu buttons
+        QString leftButtons = kdecorationGroup.readEntry(QStringLiteral("ButtonsOnLeft"), QStringLiteral("MSE"));
+        QString rightButtons = kdecorationGroup.readEntry(QStringLiteral("ButtonsOnRight"), QStringLiteral("HIAX"));
+        leftButtons.remove(QChar('N'));
+        rightButtons.remove(QChar('N'));
+        kdecorationGroup.writeEntry(QStringLiteral("ButtonsOnLeft"), leftButtons);
+        kdecorationGroup.writeEntry(QStringLiteral("ButtonsOnRight"), rightButtons);
+
+        m_kwinConfiguration->sync();
     }
 }
 }
