@@ -76,18 +76,19 @@ public:
     }
 
     struct TitleParams {
-        bool useRawTitle;
+        bool useRawTitle = true;
         QString rawTitle;
         QString documentName;
         QString appName;
-        qreal documentNameWidth;
-        qreal appNameWidth;
-        qreal appIconSpaceWidthAfter;
-        qreal appIconSpaceWidthBefore;
-        int appIconWidth;
-        qreal maxTitleWidth;
-        qreal maxTitleWidthCeil;
-        bool appNameIsRawTitle;
+        qreal documentNameWidth = 0;
+        qreal appNameWidth = 0;
+        qreal appIconSpaceWidthAfter = 0;
+        qreal appIconSpaceWidthBefore = 0;
+        int appIconWidth = 0;
+        qreal maxTitleWidth = 0;
+        qreal maxTitleWidthCeil = 0;
+        bool appNameIsRawTitle = false;
+        bool documentNameIsRawTitle = false;
     };
     std::shared_ptr<TitleParams> getTitleParams();
     //* return the rect in which caption will be drawn
