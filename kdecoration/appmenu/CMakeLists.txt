@@ -1,4 +1,5 @@
 set(breezedecoration_appmenu_SRCS
+    appmenu/acceleratorhandler.cpp
     appmenu/button.cpp
     appmenu/buttongroup.cpp
     appmenu/iconbutton.cpp

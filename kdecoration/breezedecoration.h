@@ -104,6 +104,20 @@ public:
     }
     //@}
 
+    void setAltHeld(bool value)
+    {
+        if (m_altHeld == value)
+            return;
+        m_altHeld = value;
+        altHeldChanged(value);
+    }
+    bool isAltHeld() const
+    {
+        return m_altHeld;
+    }
+
+    bool handleAccelerator(QKeySequence key);
+
     //*@name colors
     //@{
     DecorationColors *decorationColors()
@@ -279,6 +293,7 @@ public:
 
 Q_SIGNALS:
     void reconfigured();
+    void altHeldChanged(bool value);
     void buttonUnisonHoveredChanged(bool); // for unison hovering
 
 public Q_SLOTS:
@@ -370,6 +385,7 @@ private:
     bool m_isRightToLeft = false;
     KDecoration3::DecorationButtonGroup *m_leftButtons = nullptr;
     KDecoration3::DecorationButtonGroup *m_rightButtons = nullptr;
+    bool m_altHeld = false;
     bool m_leftButtonsVisible = false;
     bool m_rightButtonsVisible = false;
     class AppMenuButtonGroup *m_appMenuBarButtons = nullptr;

@@ -48,11 +48,8 @@ void AppMenuTextButton::drawContent(QPainter *painter, QPointF offsetDecorationT
     painter->setPen(foreground);
     painter->setRenderHint(QPainter::TextAntialiasing);
 
-    // TODO: If it becomes possible to listen to alt down/up and alt shortcuts, render the mnemonics.
-    // Without notice that alt has been pressed, we can't easily tell KWin the button has an update to render.
-    // And without being able to listen for alt shortcuts, we currently can't implement these shortcuts anyways.
-    // const bool isAltPressed = (QGuiApplication::keyboardModifiers() & Qt::AltModifier) != 0;
-    const bool isAltPressed = false;
+    // TODO: Make this behavior follow the application style's 'when to show accelerators'
+    const bool isAltPressed = m_d->isAltHeld();
     const Qt::TextFlag mnemonicFlag = isAltPressed ? Qt::TextShowMnemonic : Qt::TextHideMnemonic;
     QString text = m_text;
     QSizeF textSize = m_textSize;

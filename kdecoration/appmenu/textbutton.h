@@ -20,6 +20,7 @@
 #include "appmenu/button.h"
 
 #include <QAction>
+#include <QKeySequence>
 #include <QPointer>
 
 namespace Klassy
@@ -75,6 +76,7 @@ public:
         if (m_text == value)
             return;
         m_text = value;
+        setAccelerator(QKeySequence::mnemonic(value));
         Q_EMIT textChanged();
         updateGeometry();
     }

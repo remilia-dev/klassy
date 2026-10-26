@@ -23,6 +23,7 @@
 
 #include <KDecoration3/DecorationButton>
 
+#include <QKeySequence>
 #include <QVariantAnimation>
 
 namespace Klassy
@@ -46,6 +47,17 @@ public:
     Q_PROPERTY(qreal verticalContentOffset READ verticalContentOffset WRITE setVerticalContentOffset NOTIFY verticalContentOffsetChanged)
 
     void paint(QPainter *painter, const QRectF &repaintRegion) override;
+
+    QKeySequence accelerator() const
+    {
+        return m_accelerator;
+    }
+    void setAccelerator(QKeySequence value)
+    {
+        if (m_accelerator == value)
+            return;
+        m_accelerator = value;
+    }
 
     void setExpansionOpacity(qreal value)
     {
@@ -190,6 +202,7 @@ private:
     void setSystemScale(QPainter *painter);
     void updateAnimationState(bool hovered);
 
+    QKeySequence m_accelerator;
     qreal m_cornerRadius = 0;
     qreal m_buttonHeight = 0;
     qreal m_opacity = 0;

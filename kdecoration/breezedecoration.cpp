@@ -8,6 +8,7 @@
  */
 
 #include "breezedecoration.h"
+#include "appmenu/acceleratorhandler.h"
 
 #if KLASSY_DECORATION_DEBUG_MODE
 #include "setqdebug_logging.h"
@@ -41,6 +42,7 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QHoverEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QTextStream>
@@ -171,6 +173,11 @@ Decoration::Decoration(QObject *parent, const QVariantList &args)
         s_kdeGlobalConfig = KSharedConfig::openConfig();
     }
     g_sDecoCount++;
+    AppMenuAcceleratorHandler::registerHandler();
+    connect(this->window(), &KDecoration3::DecoratedWindow::activeChanged, this, [this](bool active) {
+        if (!active)
+            setAltHeld(false);
+    });
 }
 
 //________________________________________________________________
@@ -191,6 +198,21 @@ void Decoration::setOpacity(qreal value)
     }
     m_opacity = value;
     update();
+}
+
+bool Decoration::handleAccelerator(QKeySequence key)
+{
+    if (!m_appMenuBarButtons)
+        return false;
+    for (auto rawButton : m_appMenuBarButtons->buttons()) {
+        auto button = qobject_cast<AppMenuButton *>(rawButton);
+        if (button && button->accelerator() == key) {
+            button->trigger();
+            setAltHeld(false);
+            return true;
+        }
+    }
+    return false;
 }
 
 //________________________________________________________________
@@ -2435,6 +2457,10 @@ void Decoration::updateAppMenuBar()
         m_appMenuBarButtons = new AppMenuButtonGroup(this);
         connect(m_appMenuBarButtons, &AppMenuButtonGroup::menuUpdated, this, &Decoration::updateButtonsGeometry);
         connect(m_appMenuBarButtons, &AppMenuButtonGroup::geometryAnimationChanged, this, &Decoration::updateButtonsGeometry);
+        connect(this, &Decoration::altHeldChanged, m_appMenuBarButtons, [this]() {
+            for (auto button : m_appMenuBarButtons->buttons())
+                button->update();
+        });
         m_appMenuBarButtons->updateAppMenuModel();
     } else if ((!window()->hasApplicationMenu() || !m_internalSettings->appMenuBarEnabled()) && m_appMenuBarButtons) {
         m_appMenuBarButtons->deleteLater();
