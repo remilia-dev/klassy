@@ -27,6 +27,22 @@
 #include <QKeyEvent>
 #include <QPainterPath>
 #include <QStyle>
+#include <QWindow>
+
+#include <kwin/focuschain.h>
+#include <kwin/input.h>
+#include <kwin/input_event.h>
+#include <kwin/keyboard_input.h>
+#include <kwin/wayland/seat.h>
+#include <kwin/wayland_server.h>
+#include <kwin/waylandwindow.h>
+#include <kwin/window.h>
+#include <kwin/workspace.h>
+
+#include <kwin/internalwindow.h>
+#include <kwin/window.h>
+#include <kwin/workspace.h>
+#include <qlogging.h>
 
 namespace Klassy
 {
@@ -42,6 +58,10 @@ void NavigableMenu::keyPressEvent(QKeyEvent *event)
 {
     // First, let the base class handle standard key presses (like up, down, enter).
     QMenu::keyPressEvent(event);
+
+    if (auto window = m_decoration->activeWindow()) {
+        KWin::WaylandServer::self()->seat()->setFocusedKeyboardSurface(window->surface(), KWin::input()->keyboard()->unfilteredKeys());
+    }
 
     // If the event was not accepted by the base class, check for our custom keys.
     if (!event->isAccepted()) {
@@ -68,6 +88,13 @@ void NavigableMenu::keyPressEvent(QKeyEvent *event)
     }
 }
 
+void NavigableMenu::keyReleaseEvent(QKeyEvent *event)
+{
+    if (auto window = m_decoration->activeWindow()) {
+        KWin::WaylandServer::self()->seat()->setFocusedKeyboardSurface(window->surface(), KWin::input()->keyboard()->unfilteredKeys());
+    }
+}
+
 void NavigableMenu::showEvent(QShowEvent *event)
 {
     setPalette(m_decoration->window()->palette());
@@ -75,6 +102,8 @@ void NavigableMenu::showEvent(QShowEvent *event)
     if (!windowHandle()) {
         return;
     }
+    // NOTE: This is part of a test I'm doing locally with a modified KWin
+    windowHandle()->setProperty("kwin_leave_application_active", true);
 
     if (!m_decoration->internalSettings()->appMenuBarEnableBlur()) {
         KWindowEffects::enableBlurBehind(windowHandle(), false);

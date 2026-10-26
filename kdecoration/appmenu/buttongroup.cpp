@@ -27,6 +27,17 @@
 #include "appmenu/textbutton.h"
 #include "breezedecoration.h"
 
+#include <kwin/appmenu.h>
+#include <kwin/focuschain.h>
+#include <kwin/input.h>
+#include <kwin/input_event.h>
+#include <kwin/keyboard_input.h>
+#include <kwin/wayland/seat.h>
+#include <kwin/wayland_server.h>
+#include <kwin/waylandwindow.h>
+#include <kwin/window.h>
+#include <kwin/workspace.h>
+
 // KDecoration
 #include <KDecoration3/DecoratedWindow>
 #include <KDecoration3/ScaleHelpers>
@@ -915,6 +926,7 @@ void AppMenuButtonGroup::popupMenu(QMenu *menu, int buttonIndex)
                                                          button->verticalBackgroundOffset() + halfShrinkOffset,
                                                          -halfShrinkOffset,
                                                          -button->verticalBackgroundOffset() - halfShrinkOffset));
+    auto active = KWin::Workspace::self()->activeWindow();
     deco->popup(positioner, menu);
 
     if (buttonIndex == m_searchIndex) {
@@ -935,6 +947,11 @@ void AppMenuButtonGroup::popupMenu(QMenu *menu, int buttonIndex)
     }
     if (oldButton && oldButton != button) {
         oldButton->setChecked(false);
+    }
+
+    if (active) {
+        m_decoration->setActiveWindow(active);
+        KWin::WaylandServer::self()->seat()->setFocusedKeyboardSurface(active->surface(), KWin::input()->keyboard()->unfilteredKeys());
     }
 
     // When the search menu is shown, trigger deep caching after a short delay

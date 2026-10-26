@@ -33,6 +33,11 @@ class DecorationButton;
 class DecorationButtonGroup;
 }
 
+namespace KWin
+{
+class Window;
+}
+
 namespace Klassy
 {
 
@@ -291,6 +296,15 @@ public:
     bool appMenuBarBackgroundWindowColoredEnabled();
     bool shouldPaintAppMenuBarBackgroundWindowColored();
 
+    void setActiveWindow(KWin::Window *window)
+    {
+        m_window = window;
+    }
+    KWin::Window *activeWindow()
+    {
+        return m_window;
+    }
+
 Q_SIGNALS:
     void reconfigured();
     void altHeldChanged(bool value);
@@ -379,6 +393,8 @@ private:
 
     std::tuple<QColor, QColor> appMenuBarBackgroundColors();
     void setAppMenuBarButtonCornerRadius();
+
+    KWin::Window *m_window = nullptr;
 
     static KSharedConfig::Ptr s_kdeGlobalConfig;
     InternalSettingsPtr m_internalSettings;
